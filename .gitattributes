@@ -1,0 +1,3 @@
+* text=auto
+*.isl whitespace=-blank-at-eol
+*.zip binary

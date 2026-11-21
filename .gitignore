@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.log
+.env
+.venv/
+/outputs/
+/work/venv/
+/work/deskpet-live/library/
+/work/deskpet-live/settings/
+/work/deskpet-live/.deskpet.lock
+/work/deskpet-live/.show-panel
+/work/deskpet-live/preview-status.json
+/work/deskpet-live/relaunch-position.json
+/work/release/build/
+/work/release/dist/
