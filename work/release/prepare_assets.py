@@ -45,7 +45,7 @@ def make_toolkit():
 
     toolkit = OUTPUTS / "角色制作工具包.zip"
     with ZipFile(toolkit, "w", ZIP_DEFLATED) as zip_file:
-        for path in (ROOT / "角色制作说明.md", ROOT / "pack_character.py",
+        for path in (ROOT / "小宠物制作指令.md", ROOT / "角色制作说明.md", ROOT / "pack_character.py",
                      APP / "pet_packages.py", example):
             zip_file.write(path, path.name)
         zip_file.writestr("requirements.txt", "Pillow==13.0.0\n")
@@ -92,7 +92,7 @@ def stage(toolkit, dist):
                      PET / "platforms" / "windows" / "desktop_pet.py"):
             zip_file.write(path, path.relative_to(WORK).as_posix())
         for name in ("DeskPetNotes.iss", "DeskPetNotes.spec", "prepare_assets.py", "pack_character.py",
-                     "角色制作说明.md", "第三方许可.md", "LGPL-3.0.txt", "GPL-3.0.txt",
+                     "小宠物制作指令.md", "角色制作说明.md", "第三方许可.md", "LGPL-3.0.txt", "GPL-3.0.txt",
                      "ChineseSimplified.isl", "Inno-Translation-MIT.txt"):
             path = ROOT / name
             if path.is_file():
@@ -104,7 +104,6 @@ if __name__ == "__main__":
     parser.add_argument("--kit-only", action="store_true")
     parser.add_argument("--dist", type=Path, default=ROOT / "dist" / "DeskPetNotes")
     options = parser.parse_args()
-    existing_kit = OUTPUTS / "角色制作工具包.zip"
-    toolkit = make_toolkit() if options.kit_only or not existing_kit.is_file() else existing_kit
+    toolkit = make_toolkit()
     if not options.kit_only:
         stage(toolkit, options.dist)

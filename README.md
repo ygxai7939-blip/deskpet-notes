@@ -18,7 +18,11 @@ py -3.12 -m venv .\work\venv
 .\work\venv\Scripts\python.exe .\work\deskpet-live\open_preview.pyw
 ```
 
-首次运行时，可在「桌宠设置 → 导入角色 ZIP」选择 [示例角色](work/release/example.codex-pet.zip)。也可以在该页面导出角色制作工具包，交给 Codex 制作或整理自己的素材。[角色制作说明](work/release/角色制作说明.md)介绍了图集、动作和打包格式。
+首次运行时，可在「桌宠设置 → 导入角色 ZIP」选择[示例角色](work/release/example.codex-pet.zip)。
+
+## 制作自己的小宠物
+
+在「桌宠设置」点击「导出角色工具包」。把工具包和参考图交给 Codex，再复制[小宠物制作指令](work/release/小宠物制作指令.md)里的提示词。拿到角色 ZIP 后，在软件里预览并导入。图集和打包格式见[角色制作说明](work/release/角色制作说明.md)。
 
 ## 构建安装包
 
