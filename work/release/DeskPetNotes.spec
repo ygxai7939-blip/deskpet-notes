@@ -9,14 +9,18 @@ from PyInstaller.utils.win32.versioninfo import (
 release_dir = Path(SPECPATH)
 app_dir = release_dir.parent / 'deskpet-live'
 runtime_dir = release_dir.parent / 'deskpet-zh'
-version = run_path(str(app_dir / 'app_version.py'))['APP_VERSION']
+metadata = run_path(str(app_dir / 'app_version.py'))
+version = metadata['APP_VERSION']
+publisher = metadata['APP_PUBLISHER']
 version_parts = (*map(int, version.split('.')), 0)
 version_info = VSVersionInfo(
     ffi=FixedFileInfo(filevers=version_parts, prodvers=version_parts),
     kids=[
         StringFileInfo([StringTable('080404b0', [
+            StringStruct('CompanyName', publisher),
             StringStruct('FileDescription', '桌宠便签'),
             StringStruct('FileVersion', version),
+            StringStruct('LegalCopyright', f'Copyright © 2026 {publisher}'),
             StringStruct('OriginalFilename', 'DeskPetNotes.exe'),
             StringStruct('ProductName', '桌宠便签'),
             StringStruct('ProductVersion', version),

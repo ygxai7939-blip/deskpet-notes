@@ -1,6 +1,7 @@
 #define AppName "桌宠便签"
+#define Publisher "Ygxai"
 #ifndef AppVersion
-  #define AppVersion "1.1.0"
+  #define AppVersion "1.1.1"
 #endif
 #ifndef OutputTag
   #define OutputTag AppVersion
@@ -14,6 +15,9 @@ AppId={{A29D5EF1-A68B-4926-BBAB-26E4102595E5}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppVerName={#AppName} {#AppVersion}
+AppPublisher={#Publisher}
+AppCopyright=Copyright © 2026 {#Publisher}
+LicenseFile={#DistRoot}\licenses\DeskPetNotes-LICENSE.txt
 DefaultDirName={localappdata}\Programs\DeskPetNotes
 DefaultGroupName={#AppName}
 PrivilegesRequired=lowest

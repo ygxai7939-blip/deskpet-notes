@@ -11,7 +11,9 @@ from PIL import Image, ImageDraw
 
 ROOT = Path(__file__).resolve().parent
 WORK = ROOT.parent
-OUTPUTS = WORK.parent / "outputs"
+PROJECT = WORK.parent
+OUTPUTS = PROJECT / "outputs"
+LICENSE_FILES = (PROJECT / "LICENSE", PROJECT / "NOTICE", PROJECT / "LICENSE-APACHE-2.0.txt")
 APP = WORK / "deskpet-live"
 PET = WORK / "deskpet-zh"
 sys.path.insert(0, str(APP))
@@ -45,8 +47,8 @@ def make_toolkit():
 
     toolkit = OUTPUTS / "角色制作工具包.zip"
     with ZipFile(toolkit, "w", ZIP_DEFLATED) as zip_file:
-        for path in (ROOT / "小宠物制作指令.md", ROOT / "角色制作说明.md", ROOT / "pack_character.py",
-                     APP / "pet_packages.py", example):
+        for path in (*LICENSE_FILES, ROOT / "小宠物制作指令.md", ROOT / "角色制作说明.md",
+                     ROOT / "pack_character.py", APP / "pet_packages.py", example):
             zip_file.write(path, path.name)
         zip_file.writestr("requirements.txt", "Pillow==13.0.0\n")
     return toolkit
@@ -63,9 +65,13 @@ def stage(toolkit, dist):
     copyfile(toolkit, internal / toolkit.name)
     notices = dist / "licenses"
     notices.mkdir(exist_ok=True)
+    license_file, notice_file, previous_license = LICENSE_FILES
+    terms = notice_file.read_text(encoding="utf-8").rstrip() + "\n\n" + license_file.read_text(encoding="utf-8")
+    (notices / "DeskPetNotes-LICENSE.txt").write_text(terms, encoding="utf-8")
 
     env = Path(sys.prefix) / "Lib" / "site-packages"
     for src, name in (
+        (previous_license, previous_license.name),
         (PET / "LICENSE", "DeskPet-Apache-2.0.txt"),
         (PET / "NOTICE", "DeskPet-NOTICE.txt"),
         (APP / "DeskStickyNotes-MIT.txt", "DeskStickyNotes-MIT.txt"),
@@ -78,25 +84,22 @@ def stage(toolkit, dist):
     ):
         copyfile(src, notices / name)
 
-    names = (
-        "app_version.py", "desk_style.py", "desk_workspace.py", "edge_drag.py", "edge_notes.py",
-        "file_picker.py", "open_preview.pyw", "paper_feed.py", "pet_packages.py", "pixel_snow.py",
-        "sticky_store.py", "sticky_window.py", "workspace_style.py", "DeskStickyNotes-MIT.txt",
-    )
+    app_sources = ("app_version.py", "desk_style.py", "desk_workspace.py", "edge_drag.py", "edge_notes.py",
+                   "file_picker.py", "open_preview.pyw", "paper_feed.py", "pet_packages.py", "pixel_snow.py",
+                   "sticky_store.py", "sticky_window.py", "verify_notes.py", "workspace_style.py",
+                   "DeskStickyNotes-MIT.txt")
+    pet_sources = ("LICENSE", "NOTICE", "core/__init__.py", "core/bundle.py", "core/constants.py",
+                   "core/settings.py", "core/state.py", "platforms/windows/desktop_pet.py")
+    release_sources = ("DeskPetNotes.iss", "DeskPetNotes.spec", "prepare_assets.py", "pack_character.py",
+                       "小宠物制作指令.md", "角色制作说明.md", "第三方许可.md", "LGPL-3.0.txt", "GPL-3.0.txt",
+                       "ChineseSimplified.isl", "Inno-Translation-MIT.txt", "example.codex-pet.zip")
     with ZipFile(notices / f"DeskPetNotes-{APP_VERSION}-source.zip", "w", ZIP_DEFLATED) as zip_file:
-        zip_file.write(WORK.parent / "LICENSE", "LICENSE")
-        zip_file.write(WORK.parent / "NOTICE", "NOTICE")
-        for name in names:
-            zip_file.write(APP / name, f"deskpet-live/{name}")
-        for path in (PET / "LICENSE", PET / "NOTICE", *list((PET / "core").glob("*.py")),
-                     PET / "platforms" / "windows" / "desktop_pet.py"):
-            zip_file.write(path, path.relative_to(WORK).as_posix())
-        for name in ("DeskPetNotes.iss", "DeskPetNotes.spec", "prepare_assets.py", "pack_character.py",
-                     "小宠物制作指令.md", "角色制作说明.md", "第三方许可.md", "LGPL-3.0.txt", "GPL-3.0.txt",
-                     "ChineseSimplified.isl", "Inno-Translation-MIT.txt"):
-            path = ROOT / name
-            if path.is_file():
-                zip_file.write(path, f"release/{name}")
+        for path in (*LICENSE_FILES, PROJECT / "README.md", PROJECT / "requirements.txt"):
+            zip_file.write(path, path.name)
+        for folder, names in ((APP, app_sources), (PET, pet_sources), (ROOT, release_sources)):
+            for name in names:
+                path = folder / name
+                zip_file.write(path, path.relative_to(PROJECT).as_posix())
 
 
 if __name__ == "__main__":

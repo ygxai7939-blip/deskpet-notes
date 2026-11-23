@@ -194,17 +194,21 @@ class DesktopPet(QWidget):
         set_keep_awake(False)
         super().closeEvent(event)
 
-    def build_settings_menu(self, parent, menu_type) -> QMenu:
+    def character_paths(self) -> list[Path]:
+        return list_pets(self.library)
+
+    def build_settings_menu(self, parent, menu_type, select_character=None) -> QMenu:
         menu = menu_type(parent)
 
         # Switch Pet
         pet_group = QActionGroup(menu)
         pet_group.setExclusive(True)
-        for path in list_pets(self.library):
+        select = select_character or self._switch_pet
+        for path in self.character_paths():
             action = QAction(pet_display_name(str(path)), menu)
             action.setCheckable(True)
             action.setChecked(path == self._zip_path)
-            action.triggered.connect(lambda _c=False, p=path: self._switch_pet(p))
+            action.triggered.connect(lambda _c=False, p=path: select(p))
             pet_group.addAction(action)
             menu.addAction(action)
 

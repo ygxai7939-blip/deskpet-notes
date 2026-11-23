@@ -1,10 +1,11 @@
 """Smoke test the integrated Windows UI with test-only note data."""
 from pathlib import Path
-from zipfile import ZipFile
+from shutil import copyfile
 import json
 import sys
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
+from zipfile import ZipFile
 
 from PySide6.QtCore import QEvent, QPoint, QPointF, QTimer, Qt, QVariantAnimation
 from PySide6.QtGui import QEnterEvent, QFontDatabase, QMouseEvent, QTextBlockFormat, QTextCursor, QTextDocument
@@ -36,12 +37,17 @@ with TemporaryDirectory(dir=root) as scratch:
     path = scratch / "notes.json"
     settings_file = scratch / "pet-settings.json"
     startup_file = scratch / "startup" / "DeskPet.bat"
-    original = root.parent / "release" / "example.codex-pet.zip"
-    pet = DesktopPet(original, .5, settings.load(settings_file), library=scratch / "library",
+    library = scratch / "library"
+    library.mkdir()
+    original = library / "atlas-example.codex-pet.zip"
+    copyfile(root.parent / "release" / "example.codex-pet.zip", original)
+    original_bytes = original.read_bytes()
+    pet = DesktopPet(original, .5, settings.load(settings_file), library=library,
                      settings_file=settings_file, launch_script=root / "open_preview.pyw",
                      startup_file=startup_file)
     pet.show()
     studio = desk_workspace.DeskWorkspace(app, pet, path, tray=False, hotkeys=False)
+    assert studio.panel.findChild(desk_workspace.QLabel, "publisherCredit").text() == "Ygxai"
     assert studio.pet._anims["idle"][1] == 4
     pet_menu = studio.pet_menu()
     assert "新建便签" in [a.text() for a in pet_menu.actions()]
@@ -377,9 +383,43 @@ with TemporaryDirectory(dir=root) as scratch:
     assert pet._zip_path == pet.library / "qa-character.codex-pet.zip"
     assert pet._name == "测试角色" and settings.load(settings_file)["pet_path"] == str(pet._zip_path)
     assert all(label.text() == "测试角色" for label in studio.panel.pet_names)
+    imported = pet._zip_path
+    studio.panel.change_page(1)
+    app.processEvents()
+    cards = studio.panel.character_grid.cards
+    assert set(cards) == {original, imported}
+    assert cards[imported].isChecked() and not cards[original].isChecked()
+    assert cards[original].height() >= 150
+    pet_page = studio.panel.pages.currentWidget()
+    samples = [pet_page.mapTo(shell, QPoint(47, 112)), cards[original].mapTo(shell, QPoint(25, 45))]
+    saved_flakes = snow.flakes
+    snow.flakes = [Flake(point.x(), point.y(), 3, 0.) for point in samples]
+    rendered = studio.panel.grab().toImage()
+    snow.flakes = saved_flakes
+    for point, contrast in zip(samples, (38, 20)):
+        bright = rendered.pixelColor(point)
+        base = rendered.pixelColor(point + QPoint(18, 0))
+        assert bright.red() - base.red() >= contrast, (bright.getRgb(), base.getRgb())
+    QTest.mouseClick(cards[original], Qt.MouseButton.LeftButton)
+    assert pet._zip_path == original and settings.load(settings_file)["pet_path"] == str(original)
+    assert cards[original].isChecked() and not cards[imported].isChecked()
+    cards[imported].click()
+    assert pet._zip_path == imported and cards[imported].isChecked()
+
+    imported_bytes = imported.read_bytes()
+    QTimer.singleShot(80, lambda: confirm_preview("另存为新角色"))
+    studio.inspect_character(test_pack)
+    duplicate = library / "qa-character-2.codex-pet.zip"
+    cards = studio.panel.character_grid.cards
+    assert set(cards) == {original, imported, duplicate}
+    assert pet._zip_path == duplicate and cards[duplicate].isChecked()
+    assert read_package(duplicate).pet_id == "qa-character-2"
+    assert original.read_bytes() == original_bytes and imported.read_bytes() == imported_bytes
+
     QTimer.singleShot(80, lambda: confirm_preview("更新并使用"))
     studio.inspect_character(test_pack)
-    assert len(list(pet.library.glob("*.zip"))) == 1
+    assert pet._zip_path == imported and set(studio.panel.character_grid.cards) == {original, imported, duplicate}
+    assert settings.load(settings_file)["pet_path"] == str(imported)
     assert len(NoteStore(path).records) == 2
     bad_pack = scratch / "malformed.zip"
     with ZipFile(bad_pack, "w") as archive:
@@ -534,6 +574,6 @@ with TemporaryDirectory(dir=root) as scratch:
     assert not {note.id, extra.id}.intersection(NoteStore(path).records)
     assert not {note.id, extra.id}.intersection(studio.windows)
     studio.shutdown()
-print("PASS: notes and character import, note library and edge visibility, snow compositing and pause, "
+print("PASS: multi-character library, switching and same-ID copies, note library and edge visibility, snow compositing and pause, "
       "paper feed hold and cancel, persisted deletion and undo, save failure rollback, "
       "draggable edge tabs and note reattachment, and confirmed batch selection and deletion")

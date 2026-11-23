@@ -1,6 +1,7 @@
 """Read data-only character ZIPs and normalize their atlases for DeskPet."""
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from io import BytesIO
+from itertools import count
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -38,6 +39,13 @@ class CharacterPackage:
 
     def target(self, folder):
         return folder / f"{self.pet_id}.codex-pet.zip"
+
+    def as_new(self, folder):
+        for index in count(2):
+            suffix = f"-{index}"
+            candidate = replace(self, pet_id=self.pet_id[:48 - len(suffix)] + suffix)
+            if not candidate.target(folder).exists():
+                return candidate
 
     def install(self, folder):
         """Write an atomic two-file ZIP consumed by the upstream renderer."""

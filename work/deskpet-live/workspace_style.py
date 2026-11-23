@@ -2,12 +2,36 @@
 
 WORKSPACE_STYLE = """
 QFrame#libraryCenter { background: rgba(37,37,37,224); border: none; border-radius: 18px; }
-QFrame#libraryPet { background: #242424; border: none; border-radius: 18px; }
+QFrame#libraryPet { background: rgba(32,32,32,177); border: none; border-radius: 18px; }
 QFrame#libraryDetails { background: rgba(44,44,44,224); border: none; border-radius: 18px; }
 QFrame#feedUndo { background: #2b2b2b; border-radius: 12px; }
 QFrame#libraryTabs { background: #303030; border: none; border-radius: 12px; }
 QFrame#libraryPetShortcut { background: #242424; border: none; border-radius: 14px; }
-QFrame#librarySettings { background: #2e2e2e; border: none; border-radius: 14px; }
+QFrame#characterBehavior { background: rgba(51,51,51,114); border: none; border-radius: 14px; }
+QWidget#characterPageBody { background: transparent; }
+QScrollArea#characterPageScroll QScrollBar::add-page:vertical,
+QScrollArea#characterPageScroll QScrollBar::sub-page:vertical { background: transparent; }
+QPushButton#characterCard {
+  background: rgba(31,31,31,107); border: 1px solid #3f3f3f; border-radius: 15px;
+  padding: 0; min-height: 194px;
+}
+QPushButton#characterCard:hover { background: rgba(62,62,62,96); border-color: #676767; }
+QPushButton#characterCard:checked { background: rgba(59,59,59,119); border-color: #878787; }
+QPushButton#characterCard:focus { border-color: #ababab; }
+QLabel#characterActive {
+  color: #ededed; background: #454545; border-radius: 8px; padding: 2px 7px; font-size: 10px;
+}
+QLabel#characterDescription { color: #bdbdbd; font-size: 12px; }
+QLabel#characterEmpty {
+  color: #bdbdbd; background: rgba(40,40,40,130); border-radius: 12px; font-size: 12px;
+}
+QPushButton#characterControl {
+  color: #ebebeb; background: rgba(55,55,55,205); border: 1px solid #484848;
+  border-radius: 15px; padding: 0 12px; min-height: 30px; font-size: 12px;
+}
+QPushButton#characterControl:hover, QPushButton#characterControl:focus {
+  background: #414141; border-color: #676767;
+}
 QFrame#libraryRule { background: #3b3b3b; border: none; }
 QFrame#libraryCard { background: #2e2e2e; border: 1px solid #2e2e2e; border-radius: 14px; }
 QFrame#libraryCard[selected="true"] { background: #343434; border-color: #626262; }
@@ -17,6 +41,7 @@ QLabel#libraryCardTitle { color: #dedede; font-size: 13px; font-weight: 700; }
 QLabel#libraryDetailTitle { color: #ededed; font-size: 16px; font-weight: 700; }
 QLabel#libraryText { color: #dedede; font-size: 12px; }
 QLabel#libraryMeta { color: #a6a6a6; font-size: 11px; }
+QLabel#publisherCredit { color: #929292; font-size: 10px; }
 QLabel#libraryPreview {
   color: #c5c5c5; background: #242424; border: none; border-radius: 9px; padding: 8px 9px;
   font-size: 12px;

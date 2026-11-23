@@ -3,15 +3,17 @@ import ctypes
 from ctypes import wintypes
 from pathlib import Path
 from shutil import copyfile
+from zipfile import BadZipFile
 
 from PySide6.QtCore import QAbstractNativeEventFilter, QEvent, QPoint, QRectF, QTimer, Qt
-from PySide6.QtGui import QColor, QCursor, QImage, QPainter, QPainterPath, QPixmap, QRadialGradient
+from PySide6.QtGui import QColor, QCursor, QImage, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import (
-    QButtonGroup, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
+    QButtonGroup, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QPlainTextEdit, QScrollArea, QSizeGrip, QSizePolicy, QSpacerItem, QStackedWidget, QSystemTrayIcon,
     QVBoxLayout, QWidget, QWidgetAction,
 )
 
+from app_version import APP_PUBLISHER
 from desk_style import (
     ChoiceButton, DragArea, GlideHighlight, RoundedMenu, SheetDialog, SoftSwitch, STYLE,
     button, icon, label, show_warning,
@@ -62,7 +64,7 @@ class ElidedLabel(QLabel):
         painter = QPainter(self)
         painter.setFont(self.font())
         painter.setPen(self.palette().color(self.foregroundRole()))
-        painter.drawText(rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, text)
+        painter.drawText(rect, self.alignment(), text)
 
 
 class WorkspaceShell(QFrame):
@@ -230,26 +232,121 @@ class PetArtwork(QWidget):
 
     def paintEvent(self, _event):
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        size = self.width()
-        circle = QRectF(size * .10, size * .09, size * .80, size * .80)
-        halo = QRadialGradient(circle.center(), size * .42)
-        halo.setColorAt(0, QColor("#484848"))
-        halo.setColorAt(1, QColor("#353535"))
-        painter.setBrush(halo)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawEllipse(circle)
         sprite = self.pet._frames[0][0]
-        scaled = sprite.scaled(round(size * .68), round(size * .74),
+        scaled = sprite.scaled(self.size(),
                                Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-        painter.drawPixmap((size - scaled.width()) // 2, (size - scaled.height()) // 2 - 2, scaled)
+        painter.drawPixmap(self.rect().center() - scaled.rect().center(), scaled)
+
+
+def character_pixmap(tile, size):
+    raw = tile.tobytes("raw", "RGBA")
+    pixels = QImage(raw, tile.width, tile.height, QImage.Format.Format_RGBA8888)
+    return QPixmap.fromImage(pixels).scaled(
+        size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+
+
+class CharacterCard(QPushButton):
+    def __init__(self, path, activate):
+        super().__init__(objectName="characterCard", checkable=True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 10, 16, 12)
+        layout.setSpacing(4)
+        badge_row = QHBoxLayout()
+        badge_row.addStretch()
+        self.active_badge = label("使用中", "characterActive")
+        badge_size = self.active_badge.sizePolicy()
+        badge_size.setRetainSizeWhenHidden(True)
+        self.active_badge.setSizePolicy(badge_size)
+        badge_row.addWidget(self.active_badge)
+        layout.addLayout(badge_row)
+        sprite = label()
+        sprite.setFixedSize(106, 94)
+        sprite.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        try:
+            package = read_package(path)
+            name, description = package.name, package.description
+            sprite.setPixmap(character_pixmap(package.idle_frames[0], sprite.size()))
+        except (OSError, ValueError):
+            name = path.name.removesuffix(".codex-pet.zip")
+            description = "预览不可用"
+            sprite.setPixmap(icon("pet", "#777777", 36).pixmap(36, 36))
+        layout.addWidget(sprite, alignment=Qt.AlignmentFlag.AlignHCenter)
+        title = ElidedLabel(name, "libraryCardTitle")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title)
+        detail = label(description, "characterDescription")
+        detail.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
+        detail.setContentsMargins(10, 0, 10, 0)
+        detail.setWordWrap(True)
+        detail.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        detail.setFixedHeight(36)
+        layout.addWidget(detail)
+        layout.addStretch()
+        self.setAccessibleName(name)
+        self.setToolTip(f"{name}\n{description}" if description else name)
+        for item in self.findChildren(QLabel):
+            item.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.clicked.connect(lambda: activate(path))
+        self.set_active(False)
+
+    def set_active(self, active):
+        self.setChecked(active)
+        self.active_badge.setVisible(active)
+
+
+class CharacterGrid(QWidget):
+    def __init__(self, activate):
+        super().__init__()
+        self.activate = activate
+        self.cards = {}
+        self.snapshot = None
+        self.columns = 0
+        self.grid = QGridLayout(self)
+        self.grid.setContentsMargins(0, 0, 0, 0)
+        self.grid.setSpacing(9)
+
+    def refresh(self, paths):
+        entries = []
+        for path in paths:
+            try:
+                modified = path.stat()
+            except OSError:
+                continue
+            entries.append((path, modified.st_mtime_ns, modified.st_size))
+        if entries != self.snapshot:
+            clear_widgets(self.grid)
+            self.snapshot = entries
+            self.cards = {path: CharacterCard(path, self.activate) for path, _, _ in entries}
+            self.arrange(self.width(), rebuild=True)
+
+    def arrange(self, width, *, rebuild=False):
+        columns = 3 if width >= 580 else 2 if width >= 315 else 1
+        if columns == self.columns and not rebuild:
+            return
+        self.columns = columns
+        for i in range(3):
+            self.grid.setColumnStretch(i, int(i < self.columns))
+        for i, card in enumerate(self.cards.values()):
+            self.grid.removeWidget(card)
+            self.grid.addWidget(card, i // self.columns, i % self.columns)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.arrange(event.size().width())
+
+    def set_active(self, active):
+        for path, card in self.cards.items():
+            card.set_active(path == active)
 
 
 class CharacterPreview(SheetDialog):
     def __init__(self, pack, updating, parent):
         super().__init__("角色预览", parent)
         self.setMinimumWidth(372)
+        self.save_as_new = False
         surface = frame("feature")
         artwork = QVBoxLayout(surface)
         sprite = label()
@@ -264,14 +361,11 @@ class CharacterPreview(SheetDialog):
             detail = label(pack.description, "muted")
             detail.setWordWrap(True)
             self.body.addWidget(detail)
-        caption = "待机预览 · 更新同一角色" if updating else "待机预览"
-        self.body.addWidget(label(caption, "caption"))
-        pixmaps = []
-        for tile in pack.idle_frames:
-            raw = tile.tobytes("raw", "RGBA")
-            pixels = QImage(raw, tile.width, tile.height, QImage.Format.Format_RGBA8888).copy()
-            pixmaps.append(QPixmap.fromImage(pixels).scaled(
-                sprite.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+        caption = "此角色 ID 已存在。可以更新原角色，或保留两份。" if updating else "待机预览"
+        notice = label(caption, "caption")
+        notice.setWordWrap(True)
+        self.body.addWidget(notice)
+        pixmaps = [character_pixmap(tile, sprite.size()) for tile in pack.idle_frames]
         position = 0
         sprite.setPixmap(pixmaps[position])
 
@@ -290,8 +384,16 @@ class CharacterPreview(SheetDialog):
         cancel = button("取消", self.reject)
         cancel.setDefault(True)
         actions.addWidget(cancel)
-        actions.addWidget(button("更新并使用" if updating else "安装并使用", self.accept, "primary"))
+        if updating:
+            actions.addWidget(button("更新并使用", self.accept))
+            actions.addWidget(button("另存为新角色", self.accept_as_new, "primary"))
+        else:
+            actions.addWidget(button("安装并使用", self.accept, "primary"))
         self.body.addLayout(actions)
+
+    def accept_as_new(self):
+        self.save_as_new = True
+        self.accept()
 
 
 class Workspace(QWidget):
@@ -299,7 +401,6 @@ class Workspace(QWidget):
         super().__init__(None, Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint)
         self.studio = studio
         self.pet_names = []
-        self.artworks = []
         self.note_cards = {}
         self.selected_note_id = None
         self.checked_notes = set()
@@ -412,6 +513,9 @@ class Workspace(QWidget):
         self.pet_toggle = button("", self.studio.toggle_pet, "librarySecondary")
         row.addWidget(self.pet_toggle)
         layout.addWidget(shortcut)
+        credit = label(APP_PUBLISHER, "publisherCredit")
+        credit.setContentsMargins(10, 0, 0, 0)
+        layout.addWidget(credit)
         return rail
 
     def note_page(self):
@@ -541,30 +645,55 @@ class Workspace(QWidget):
 
     def pet_page(self):
         page = frame("libraryPet")
-        root = QVBoxLayout(page)
-        root.setContentsMargins(17, 16, 17, 16)
-        root.setSpacing(14)
-        root.addWidget(label("桌宠设置", "libraryHeading"))
-        card = frame("librarySettings")
-        content = QHBoxLayout(card)
-        content.setContentsMargins(13, 8, 18, 8)
-        content.addWidget(self.artwork(157))
-        info = QVBoxLayout()
-        info.setSpacing(6)
-        info.addStretch()
-        info.addWidget(self.character_name("libraryDetailTitle"))
-        info.addWidget(label("双击桌宠打开便签卡片", "libraryMeta"))
-        info.addSpacing(5)
-        info.addWidget(button("导入角色 ZIP", self.studio.choose_character_file, "libraryAction", "plus", color="#dedede"),
-                       alignment=Qt.AlignmentFlag.AlignLeft)
-        info.addWidget(button("导出角色工具包", self.studio.export_character_toolkit, "librarySecondary"),
-                       alignment=Qt.AlignmentFlag.AlignLeft)
-        info.addWidget(label("也可以把 ZIP 拖到这里", "libraryMeta"))
-        info.addStretch()
-        content.addLayout(info, 1)
-        root.addWidget(card)
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(24, 18, 24, 16)
+        outer.setSpacing(8)
+        heading = QHBoxLayout()
+        heading.addWidget(label("桌宠设置", "libraryHeading"), 1)
+        self.active_pet_toggle = button("", self.studio.toggle_pet, "characterControl")
+        heading.addWidget(self.active_pet_toggle)
+        outer.addLayout(heading)
+        scroll = QScrollArea(objectName="characterPageScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.viewport().setAutoFillBackground(False)
+        body = QWidget(objectName="characterPageBody")
+        scroll.setWidget(body)
+        outer.addWidget(scroll, 1)
+        root = QVBoxLayout(body)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(11)
+        preview = QVBoxLayout()
+        preview.setContentsMargins(0, 12, 0, 20)
+        preview.setSpacing(3)
+        self.active_artwork = PetArtwork(self.studio.pet, 140)
+        preview.addWidget(self.active_artwork, alignment=Qt.AlignmentFlag.AlignHCenter)
+        name = self.character_name("libraryDetailTitle")
+        name.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        preview.addWidget(name)
+        self.active_pet_status = label("", "libraryMeta")
+        preview.addWidget(self.active_pet_status, alignment=Qt.AlignmentFlag.AlignHCenter)
+        root.addLayout(preview)
+
+        library_header = QHBoxLayout()
+        library_header.setSpacing(8)
+        library_header.addWidget(label("我的桌宠", "libraryTitle"))
+        self.character_count = label("", "libraryMeta")
+        library_header.addWidget(self.character_count)
+        library_header.addStretch()
+        library_header.addWidget(button("导出角色工具包", self.studio.export_character_toolkit, "characterControl"))
+        library_header.addWidget(button("导入角色 ZIP", self.studio.choose_character_file, "characterControl",
+                                        "plus", "导入角色 ZIP，也可拖入此窗口", color="#dedede"))
+        root.addLayout(library_header)
+        self.character_grid = CharacterGrid(self.studio.select_character)
+        root.addWidget(self.character_grid)
+        self.empty_library = label("把角色 ZIP 拖到这里，或点击「导入角色 ZIP」", "characterEmpty")
+        self.empty_library.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_library.setFixedHeight(84)
+        root.addWidget(self.empty_library)
+
         root.addWidget(label("行为设置", "libraryTitle"))
-        settings = frame("librarySettings")
+        settings = frame("characterBehavior")
         grid = QVBoxLayout(settings)
         grid.setContentsMargins(14, 10, 14, 10)
         grid.setSpacing(7)
@@ -594,16 +723,13 @@ class Workspace(QWidget):
     def change_page(self, page):
         self.pages.setCurrentIndex(page)
         self.group.button(page).setChecked(True)
+        if page == 1:
+            self.refresh_library()
         self.refresh()
 
     def filter_notes(self, index):
         self.filter_index = index
         self.refresh()
-
-    def artwork(self, size):
-        widget = PetArtwork(self.studio.pet, size)
-        self.artworks.append(widget)
-        return widget
 
     def character_name(self, role):
         widget = ElidedLabel(self.studio.pet._name, role)
@@ -615,11 +741,27 @@ class Workspace(QWidget):
         for widget in self.pet_names:
             widget.setText(pet._name)
             widget.setToolTip(pet._name)
-        for widget in self.artworks:
-            widget.setAccessibleName(pet._name)
-            widget.update()
+        self.active_artwork.setAccessibleName(pet._name)
+        self.active_artwork.update()
         self.sidebar_avatar.setPixmap(pet._frames[0][0].scaled(
             27, 27, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+        self.character_grid.set_active(pet._zip_path)
+        visible = pet.isVisible()
+        self.pet_status.setText("在桌面上" if visible else "已收起" if pet.has_character else "可导入 ZIP")
+        self.pet_toggle.setText("收起" if visible else "显示" if pet.has_character else "导入")
+        toggle = "收起桌宠" if visible else "显示桌宠" if pet.has_character else "导入角色"
+        self.pet_toggle.setAccessibleName(toggle)
+        self.active_pet_toggle.setText(toggle)
+        self.active_pet_toggle.setVisible(pet.has_character)
+        self.active_pet_status.setText("在桌面上" if visible else "已收起" if pet.has_character else "导入后可在桌面显示")
+
+    def refresh_library(self):
+        self.character_grid.refresh(self.studio.pet.character_paths())
+        count = len(self.character_grid.cards)
+        self.character_count.setText(f"{count} 个角色")
+        self.character_grid.setVisible(count > 0)
+        self.empty_library.setVisible(count == 0)
+        self.character_grid.set_active(self.studio.pet._zip_path)
 
     def open_selected_note(self):
         note = self.studio.store.records.get(self.selected_note_id)
@@ -693,10 +835,6 @@ class Workspace(QWidget):
 
     def refresh(self):
         self.refresh_character()
-        visible = self.studio.pet.isVisible()
-        self.pet_status.setText("在桌面上" if visible else "已收起" if self.studio.pet.has_character else "可导入 ZIP")
-        self.pet_toggle.setText("收起" if visible else "显示" if self.studio.pet.has_character else "导入")
-        self.pet_toggle.setAccessibleName("收起桌宠" if visible else "显示桌宠" if self.studio.pet.has_character else "导入角色")
         notes = self.studio.sorted_notes()
         search = self.search.text().strip().casefold()
         def matches_filter(note):
@@ -1063,16 +1201,28 @@ class DeskWorkspace:
             preview = CharacterPreview(package, package.target(self.pet.library).exists(), self.panel)
             try:
                 accepted = bool(preview.exec())
+                save_as_new = preview.save_as_new
             finally:
                 preview.deleteLater()
             if accepted:
-                self.pet._switch_pet(package.install(self.pet.library))
-                if not self.pet.isVisible():
-                    self.pet.show()
-                self.panel.refresh()
-                self.refresh_tray()
+                if save_as_new:
+                    package = package.as_new(self.pet.library)
+                installed = package.install(self.pet.library)
+                self.panel.refresh_library()
+                self.select_character(installed, reload=True)
         except (ValueError, OSError) as error:
             show_warning(self.panel, "角色导入失败", str(error))
+
+    def select_character(self, path, *, reload=False):
+        try:
+            if reload or path != self.pet._zip_path:
+                self.paper_feed.cancel()
+                self.pet._switch_pet(path)
+            self.pet.show()
+        except (OSError, ValueError, BadZipFile, KeyError, TypeError) as error:
+            show_warning(self.panel, "角色切换失败", str(error))
+        self.panel.refresh_character()
+        self.refresh_tray()
 
     def toggle_pet(self):
         if not self.pet.has_character:
@@ -1081,7 +1231,7 @@ class DeskWorkspace:
         self.paper_feed.cancel()
         self.hide_feed_undo()
         self.pet.setVisible(not self.pet.isVisible())
-        self.panel.refresh()
+        self.panel.refresh_character()
         self.refresh_tray()
 
     def tray_activated(self, reason):
@@ -1138,7 +1288,7 @@ class DeskWorkspace:
             menu.addAction("撤销上次投喂", self.undo_feed)
         menu.addSeparator()
         if header:
-            options = self.pet.build_settings_menu(menu, RoundedMenu)
+            options = self.pet.build_settings_menu(menu, RoundedMenu, self.select_character)
             options.setIcon(icon("pet", "#dedede", 17))
             options.setTitle("宠物设置")
             menu.addMenu(options)
