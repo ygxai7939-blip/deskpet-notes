@@ -1,6 +1,7 @@
 """The common DeskPet window, note controller, tray, and pet context menu."""
 import ctypes
 from ctypes import wintypes
+from dataclasses import replace
 from pathlib import Path
 from shutil import copyfile
 
@@ -27,7 +28,7 @@ from file_picker import pick_file
 from paper_feed import PaperFeed
 from pet_packages import read_package
 from pixel_snow import PixelSnow
-from sticky_store import Note, NoteStore
+from sticky_store import Note, NoteStore, TAG_NAME_LENGTH, normalize_tag, tag_key
 from sticky_window import StickyWindow, fit_to_desktop
 from workspace_style import WORKSPACE_STYLE
 
@@ -55,6 +56,13 @@ def note_state(note):
     return "已收回" if note.collapsed else "已隐藏"
 
 
+def show_note_tags(widget, tags):
+    text = "   ".join(f"#{name}" for name in tags)
+    widget.setText(text)
+    widget.setToolTip("、".join(tags))
+    widget.setVisible(bool(tags))
+
+
 class ElidedLabel(QLabel):
     def __init__(self, text, role):
         super().__init__(text)
@@ -69,6 +77,100 @@ class ElidedLabel(QLabel):
         painter.setFont(self.font())
         painter.setPen(self.palette().color(self.foregroundRole()))
         painter.drawText(rect, self.alignment(), text)
+
+
+class TagEditor(SheetDialog):
+    def __init__(self, note, known_tags, parent):
+        super().__init__("编辑标签", parent)
+        self.setFixedWidth(454)
+        self.known_tags = known_tags
+        self.tags = {tag_key(tag): tag for tag in note.tags}
+        title = ElidedLabel(note.label, "muted")
+        title.setToolTip(note.label)
+        self.body.addWidget(title)
+
+        controls = QHBoxLayout()
+        self.entry = QLineEdit(objectName="tagEntry")
+        self.entry.setPlaceholderText("输入标签，回车添加")
+        self.entry.setAccessibleName("标签名称")
+        self.entry.setMaxLength(TAG_NAME_LENGTH)
+        self.entry.returnPressed.connect(self.add_entry)
+        controls.addWidget(self.entry, 1)
+        add = button("添加", self.add_entry, "secondary")
+        add.setAutoDefault(False)
+        controls.addWidget(add)
+        self.existing = button("已有标签", self.choose_existing, "secondary")
+        self.existing.setAutoDefault(False)
+        controls.addWidget(self.existing)
+        self.body.addLayout(controls)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.viewport().setAutoFillBackground(False)
+        scroll.setFixedHeight(113)
+        contents = QWidget(objectName="noteList")
+        scroll.setWidget(contents)
+        self.chips = QGridLayout(contents)
+        self.chips.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.chips.setContentsMargins(0, 1, 5, 1)
+        self.chips.setSpacing(6)
+        self.body.addWidget(scroll)
+
+        actions = QHBoxLayout()
+        actions.addStretch()
+        cancel = button("取消", self.reject, "secondary")
+        cancel.setAutoDefault(False)
+        actions.addWidget(cancel)
+        save = button("保存", self.accept, "primary")
+        save.setAutoDefault(False)
+        actions.addWidget(save)
+        self.body.addLayout(actions)
+        self.refresh_chips()
+        self.entry.setFocus()
+
+    def add_entry(self):
+        name = normalize_tag(self.entry.text())
+        if name:
+            self.add_tag(name)
+        self.entry.clear()
+        self.entry.setFocus()
+
+    def add_tag(self, name):
+        key = tag_key(name)
+        self.tags.setdefault(key, self.known_tags.get(key, name))
+        self.refresh_chips()
+
+    def remove_tag(self, key):
+        self.tags.pop(key)
+        self.refresh_chips()
+
+    def choose_existing(self):
+        menu = RoundedMenu(self.existing)
+        for key, name in self.known_tags.items():
+            if key not in self.tags:
+                menu.addAction(name.replace("&", "&&"), lambda _, tag=name: self.add_tag(tag))
+        try:
+            menu.exec(self.existing.mapToGlobal(QPoint(0, self.existing.height() + 4)))
+        finally:
+            menu.deleteLater()
+
+    def refresh_chips(self):
+        clear_widgets(self.chips)
+        self.existing.setEnabled(any(key not in self.tags for key in self.known_tags))
+        if not self.tags:
+            self.chips.addWidget(label("还没有标签", "muted"), 0, 0)
+        for index, (key, name) in enumerate(self.tags.items()):
+            chip = button("", lambda _, value=key: self.remove_tag(value), "tagChip", tip=f"移除标签 {name}")
+            chip.setAutoDefault(False)
+            chip.setText(chip.fontMetrics().elidedText(name, Qt.TextElideMode.ElideRight, 142) + "  ×")
+            self.chips.addWidget(chip, index // 2, index % 2)
+
+    def accept(self):
+        name = normalize_tag(self.entry.text())
+        if name:
+            self.add_tag(name)
+        super().accept()
 
 
 class WorkspaceShell(QFrame):
@@ -132,9 +234,15 @@ class NoteCard(QFrame):
         preview.setWordWrap(True)
         preview.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         preview.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
-        preview.setFixedHeight(111)
+        preview.setFixedHeight(89 if note.tags else 111)
         preview.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         panel.addWidget(preview)
+        if note.tags:
+            tags = ElidedLabel("", "libraryTags")
+            tags.setFixedHeight(15)
+            show_note_tags(tags, note.tags)
+            tags.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            panel.addWidget(tags)
         actions = QHBoxLayout()
         actions.setSpacing(5)
         state = label(note_state(note), "libraryMeta")
@@ -478,6 +586,7 @@ class Workspace(QWidget):
         self.selected_note_id = None
         self.checked_notes = set()
         self.filter_index = 0
+        self.tag_filter = None
         self.setWindowTitle("桌宠便签")
         self.setWindowIcon(icon("note", "#dedede", 32))
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
@@ -605,7 +714,7 @@ class Workspace(QWidget):
         bar.addWidget(label("便签库", "libraryTitle"))
         bar.addStretch()
         self.search = QLineEdit(objectName="librarySearch")
-        self.search.setPlaceholderText("搜索便签标题或正文")
+        self.search.setPlaceholderText("搜索标题、正文或标签")
         self.search.setAccessibleName("搜索便签")
         self.search.setClearButtonEnabled(True)
         self.search.setMinimumWidth(126)
@@ -630,6 +739,9 @@ class Workspace(QWidget):
             toggle.addWidget(tab)
         self.note_filters.button(0).setChecked(True)
         toolbar.addWidget(tabs)
+        self.tag_filter_button = button("标签 · 全部", self.choose_tag_filter, "libraryTagFilter",
+                                        "tag", "按标签筛选", color="#d6d6d6")
+        toolbar.addWidget(self.tag_filter_button)
         toolbar.addStretch()
         self.summary = label("", "libraryMeta")
         toolbar.addWidget(self.summary)
@@ -706,12 +818,19 @@ class Workspace(QWidget):
         detail.addWidget(self.detail_title)
         self.detail_status = label("", "libraryMeta")
         detail.addWidget(self.detail_status)
+        self.detail_tags = ElidedLabel("", "libraryTags")
+        detail.addWidget(self.detail_tags)
         self.detail_text = QPlainTextEdit(objectName="libraryDetailText")
         self.detail_text.setReadOnly(True)
         self.detail_text.viewport().setAutoFillBackground(False)
         self.detail_text.setAccessibleName("便签正文预览")
         detail.addWidget(self.detail_text, 1)
-        detail.addWidget(button("打开便签", self.open_selected_note, "libraryAction", "open", color="#dedede"))
+        actions = QHBoxLayout()
+        actions.addWidget(button("打开便签", self.open_selected_note, "libraryAction", "open", color="#dedede"), 1)
+        edit_tags = button("", self.edit_selected_tags, "libraryAction", "tag", "编辑标签", color="#dedede")
+        edit_tags.setFixedWidth(35)
+        actions.addWidget(edit_tags)
+        detail.addLayout(actions)
         self.detail_pages.addWidget(selected)
         layout.addWidget(self.detail_pages, 1)
         return aside
@@ -816,6 +935,36 @@ class Workspace(QWidget):
         self.filter_index = index
         self.refresh()
 
+    def set_tag_filter(self, key):
+        self.tag_filter = key
+        self.refresh()
+
+    def choose_tag_filter(self):
+        anchor = self.tag_filter_button
+        menu = RoundedMenu(anchor)
+        tags = self.studio.known_tags()
+        options = [(None, "全部标签"), *tags.items()]
+        for key, name in options:
+            action = menu.addAction(name.replace("&", "&&"), lambda _, value=key: self.set_tag_filter(value))
+            action.setCheckable(True)
+            action.setChecked(key == self.tag_filter)
+        if not tags:
+            menu.addAction("还没有标签").setEnabled(False)
+        try:
+            menu.exec(anchor.mapToGlobal(QPoint(0, anchor.height() + 4)))
+        finally:
+            menu.deleteLater()
+
+    def refresh_tag_filter(self):
+        tags = self.studio.known_tags()
+        if self.tag_filter not in tags:
+            self.tag_filter = None
+        caption = "标签 · " + tags.get(self.tag_filter, "全部")
+        control = self.tag_filter_button
+        control.setText(control.fontMetrics().elidedText(caption, Qt.TextElideMode.ElideRight, 88))
+        control.setToolTip(caption if self.tag_filter else "按标签筛选")
+        control.setAccessibleName(caption)
+
     def character_name(self, role):
         widget = ElidedLabel(self.studio.pet._name, role)
         self.pet_names.append(widget)
@@ -853,6 +1002,11 @@ class Workspace(QWidget):
         if note is not None:
             self.studio.show_note(note)
 
+    def edit_selected_tags(self):
+        note = self.studio.store.records.get(self.selected_note_id)
+        if note is not None:
+            self.studio.edit_note_tags(note)
+
     def select_note(self, note):
         self.selected_note_id = note.id if note is not None else None
         self.update_selection()
@@ -860,6 +1014,7 @@ class Workspace(QWidget):
         if note is not None:
             self.detail_title.setText(note.label)
             self.detail_status.setText(note_state(note))
+            show_note_tags(self.detail_tags, note.tags)
             text = note.textContent or "空白便签"
             if self.detail_text.toPlainText() != text:
                 self.detail_text.setPlainText(text)
@@ -920,21 +1075,24 @@ class Workspace(QWidget):
 
     def refresh(self):
         self.refresh_character()
+        self.refresh_tag_filter()
         notes = self.studio.sorted_notes()
-        search = self.search.text().strip().casefold()
+        search = tag_key(self.search.text().strip())
         def matches_filter(note):
-            return (True, note.visible, not note.visible and not note.archived, note.archived)[self.filter_index]
+            state = (True, note.visible, not note.visible and not note.archived, note.archived)[self.filter_index]
+            return state and (self.tag_filter is None or any(tag_key(name) == self.tag_filter for name in note.tags))
 
         shown = [note for note in notes
                  if matches_filter(note)
-                 and (not search or search in (note.label + "\n" + note.textContent).casefold())]
+                 and (not search or search in tag_key("\n".join((note.label, note.textContent, *note.tags))))]
+        filtering = bool(search or self.filter_index or self.tag_filter)
         self.checked_notes.intersection_update(note.id for note in shown)
-        self.summary.setText(f"{len(shown)} / {len(notes)} 张" if search or self.filter_index else f"{len(notes)} 张便签")
+        self.summary.setText(f"{len(shown)} / {len(notes)} 张" if filtering else f"{len(notes)} 张便签")
         self.note_glide.clear()
         clear_widgets(self.note_list)
         self.note_cards.clear()
         if not shown:
-            message = "没有匹配的便签" if search or self.filter_index else "还没有便签"
+            message = "没有匹配的便签" if filtering else "还没有便签"
             empty = label(message, "libraryMeta")
             empty.setContentsMargins(0, 30, 0, 6)
             empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -1007,6 +1165,13 @@ class DeskWorkspace:
 
     def sorted_notes(self):
         return sorted(self.store.records.values(), key=lambda note: note.updatedAt, reverse=True)
+
+    def known_tags(self):
+        tags = {}
+        for note in self.store.records.values():
+            for name in note.tags:
+                tags.setdefault(tag_key(name), name)
+        return dict(sorted(tags.items()))
 
     def active_notes(self):
         return [note for note in self.sorted_notes() if not note.archived]
@@ -1246,6 +1411,7 @@ class DeskWorkspace:
     def note_actions(self, note, anchor):
         menu = RoundedMenu(anchor)
         menu.addAction("恢复并打开" if note.archived else "打开便签", lambda: self.show_note(note))
+        menu.addAction(icon("tag", "#dedede", 17), "编辑标签", lambda: self.edit_note_tags(note))
         if note.visible:
             menu.addAction("隐藏到列表", lambda: self.windows[note.id].close())
             menu.addAction("折叠回宠物", lambda: self.windows[note.id].fold_into_pet())
@@ -1253,6 +1419,21 @@ class DeskWorkspace:
         menu.addAction("删除便签", lambda: self.ask_delete(note))
         menu.exec(anchor.mapToGlobal(QPoint(0, anchor.height() + 4)))
         menu.deleteLater()
+
+    def edit_note_tags(self, note, parent=None):
+        dialog = TagEditor(note, self.known_tags(), parent or self.panel)
+        try:
+            if not dialog.exec():
+                return
+            tags = list(dialog.tags.values())
+        finally:
+            dialog.deleteLater()
+        if tags == note.tags or self.store.records.get(note.id) is not note:
+            return
+        records = {**self.store.records, note.id: replace(note, tags=tags)}
+        if self.save_notes(records):
+            note.tags = tags
+            self.refresh_notes()
 
     def open_panel(self, *, page=None):
         if page is None:

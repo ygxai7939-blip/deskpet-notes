@@ -533,6 +533,7 @@ class StickyWindow(QWidget):
     def options_menu(self):
         menu = RoundedMenu(self)
         menu.addAction("格式与文本片段", lambda: self.format_bar.setVisible(self.format_bar.isHidden()))
+        menu.addAction(icon("tag", "#dedede", 17), "编辑标签", lambda: self.studio.edit_note_tags(self.note, self))
         dock = menu.submenu("桌面边缘")
         for side, caption in (("left", "贴到左边缘"), ("right", "贴到右边缘")):
             dock.addAction(caption, lambda _=False, value=side: self.studio.edge_notes.attach(self, value, self.screen()))

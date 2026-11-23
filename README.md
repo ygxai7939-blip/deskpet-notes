@@ -6,6 +6,7 @@
 
 - 双击桌宠打开便签库，右键可新建便签或调整桌宠设置。
 - 拖动便签到屏幕边缘即可贴边，点击边缘标签展开或收起。支持搜索、清单勾选、归档和批量删除。
+- 便签的「··· → 编辑标签」可添加或移除多个标签。便签库支持按标签和状态组合筛选，也可以搜索标题、正文或标签。
 - 支持导入多个角色 ZIP，在「桌宠设置 → 我的桌宠」点卡片切换当前角色。导入时可预览，遇到相同 ID 可更新或另存。
 - 角色卡片右上角的「…」可预览 9 个动作或删除角色。删除当前角色时优先切到后面最近可用的角色，再找前面的角色。确认框会显示切换结果。
 - 在「桌宠设置 → 备份与恢复」把便签、角色和设置导出为一个 ZIP。还原前会显示备份日期和数量，并自动保存还原前的数据。
@@ -44,7 +45,7 @@ py -3.12 -m venv .\work\venv
 & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" .\work\release\DeskPetNotes.iss
 ```
 
-安装包生成在 `outputs/DeskPetNotes-Setup-1.1.3.exe`。如需运行界面冒烟测试，可以执行 `.\work\venv\Scripts\python.exe .\work\deskpet-live\verify_notes.py`。测试使用临时目录及仓库内的示例角色。
+安装包生成在 `outputs/DeskPetNotes-Setup-1.1.4.exe`。如需运行界面冒烟测试，可以执行 `.\work\venv\Scripts\python.exe .\work\deskpet-live\verify_notes.py`。测试使用临时目录及仓库内的示例角色。
 
 ## 许可证
 

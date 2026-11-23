@@ -22,7 +22,7 @@ from edge_notes import TAB_STEP
 from paper_feed import HOLD_MS, SWALLOW_MS
 from pet_packages import read_package
 from pixel_snow import Flake
-from sticky_store import Note, NoteStore
+from sticky_store import Note, NoteStore, tag_key
 
 
 from core import settings
@@ -653,7 +653,73 @@ with TemporaryDirectory(dir=root) as scratch:
     archived = Note(title="备份测试", visible=False, archived=True, color="薄荷",
                     textContent="已完成", richContent='<ul><li class="checked">已完成</li></ul>')
     studio.store.records[archived.id] = archived
+    untagged = Note(title="标签测试", textContent="另一个工作事项", visible=False)
+    studio.store.records[untagged.id] = untagged
     studio.changed()
+    studio.open_panel(page=0)
+    panel.select_note(archived)
+    edited = []
+
+    def answer_tags(names, *, save=True):
+        dialog = app.activeModalWidget()
+        if not isinstance(dialog, desk_workspace.TagEditor):
+            return
+        try:
+            for name in names:
+                dialog.entry.setText(name)
+                QTest.keyClick(dialog.entry, Qt.Key.Key_Return)
+            edited.append(list(dialog.tags.values()))
+            if save:
+                next(control for control in dialog.findChildren(QPushButton) if control.text() == "保存").click()
+            else:
+                dialog.reject()
+        finally:
+            if dialog.isVisible():
+                dialog.reject()
+
+    QTimer.singleShot(70, lambda: answer_tags(("  工作  ", " ＵＩ ", "ui")))
+    panel.edit_selected_tags()
+    assert edited[-1] == ["工作", "ＵＩ"] and archived.tags == edited[-1]
+    assert NoteStore(path).records[archived.id].tags == archived.tags
+    assert "#工作" in panel.detail_tags.text()
+    QTimer.singleShot(70, lambda: answer_tags(("临时标签",), save=False))
+    studio.edit_note_tags(archived)
+    assert archived.tags == ["工作", "ＵＩ"]
+
+    QTimer.singleShot(70, lambda: answer_tags(("工作",)))
+    studio.edit_note_tags(untagged)
+    panel.set_tag_filter(tag_key("工作"))
+    assert set(panel.note_cards) == {archived.id, untagged.id}
+    panel.search.setText("已完成")
+    assert set(panel.note_cards) == {archived.id}
+    panel.search.clear()
+    panel.note_filters.button(3).click()
+    assert set(panel.note_cards) == {archived.id}
+    panel.search.setText("ui")
+    assert set(panel.note_cards) == {archived.id}
+    panel.search.clear()
+    panel.note_filters.button(0).click()
+    panel.set_tag_filter(None)
+
+    def remove_work_tag():
+        dialog = app.activeModalWidget()
+        if isinstance(dialog, desk_workspace.TagEditor):
+            control = next(item for item in dialog.findChildren(QPushButton)
+                           if item.accessibleName() == "移除标签 工作")
+            control.click()
+            dialog.accept()
+
+    with patch.object(studio.store, "save", side_effect=PermissionError("test")), \
+         patch.object(desk_workspace, "show_warning") as messages:
+        QTimer.singleShot(70, remove_work_tag)
+        studio.edit_note_tags(untagged)
+        messages.assert_called_once()
+        assert untagged.tags == ["工作"]
+    QTimer.singleShot(70, remove_work_tag)
+    studio.edit_note_tags(untagged)
+    assert not untagged.tags
+    assert not NoteStore(path).records[untagged.id].tags
+    studio.open_panel(page=1)
     archive_path = scratch / "deskpet-backup.zip"
     actions = {control.text(): control for control in panel.findChildren(QPushButton)}
     with patch.object(desk_workspace, "pick_file", return_value=str(archive_path)), \
@@ -692,6 +758,7 @@ with TemporaryDirectory(dir=root) as scratch:
     restored = NoteStore(path).records[archived.id]
     assert restored.archived and restored.title == "备份测试"
     assert restored.textContent == "已完成" and 'class="checked"' in restored.richContent
+    assert restored.tags == ["工作", "ＵＩ"]
     assert restored.color == "薄荷" and pet._zip_path == verified_role
     assert pet._scale == expected_settings["pet_scale"] == .75
     assert pet._ps.personality == expected_settings["personality_style"] == "focused"
@@ -704,4 +771,4 @@ with TemporaryDirectory(dir=root) as scratch:
 print("PASS: multi-character library, action preview, character deletion and fallback, same-ID copies, "
       "note library and edge visibility, snow compositing and pause, "
       "paper feed hold and cancel, persisted deletion and undo, save failure rollback, "
-      "draggable edge tabs and note reattachment, batch deletion, and portable backup and restore")
+      "draggable edge tabs and note reattachment, batch deletion, tag editing and filtering, and tagged backup and restore")

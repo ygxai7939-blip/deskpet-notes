@@ -45,6 +45,7 @@ QLabel#libraryCardTitle { color: #dedede; font-size: 13px; font-weight: 700; }
 QLabel#libraryDetailTitle { color: #ededed; font-size: 16px; font-weight: 700; }
 QLabel#libraryText { color: #dedede; font-size: 12px; }
 QLabel#libraryMeta { color: #a6a6a6; font-size: 11px; }
+QLabel#libraryTags { color: #d1d1d1; font-size: 11px; }
 QLabel#publisherCredit { color: #929292; font-size: 10px; }
 QLabel#libraryPreview {
   color: #c5c5c5; background: #242424; border: none; border-radius: 9px; padding: 8px 9px;
@@ -61,6 +62,11 @@ QPushButton#libraryTab {
 }
 QPushButton#libraryTab:hover { background: #383838; }
 QPushButton#libraryTab:checked { color: #ededed; background: #494949; }
+QPushButton#libraryTagFilter {
+  color: #dedede; background: #383838; border: 1px solid #4a4a4a; border-radius: 10px;
+  padding: 0 8px; min-height: 30px; font-size: 12px;
+}
+QPushButton#libraryTagFilter:hover { background: #494949; }
 QPushButton#libraryAction {
   color: #ededed; background: #3b3b3b; border: none; border-radius: 10px;
   padding: 0 11px; min-height: 34px; font-size: 12px; font-weight: 600;

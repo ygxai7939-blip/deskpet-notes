@@ -1,7 +1,7 @@
 #define AppName "桌宠便签"
 #define Publisher "Ygxai"
 #ifndef AppVersion
-  #define AppVersion "1.1.3"
+  #define AppVersion "1.1.4"
 #endif
 #ifndef OutputTag
   #define OutputTag AppVersion

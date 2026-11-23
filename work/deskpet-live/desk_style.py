@@ -85,6 +85,10 @@ QPushButton#primary { background: #3b3b3b; color: #ffffff; font-weight: 700; }
 QPushButton#primary:hover { background: #4a4a4a; }
 QPushButton#secondary { background: #eaeaea; color: #2d2d2d; }
 QPushButton#secondary:hover { background: #dfdfdf; }
+QPushButton#tagChip {
+  background: #eaeaea; border-radius: 9px; color: #292929; text-align: left; padding: 2px 8px;
+}
+QPushButton#tagChip:hover { background: #dedede; }
 QPushButton#danger { background: #252525; color: #ffffff; font-weight: 700; }
 QPushButton#danger:hover { background: #444444; }
 QPushButton#flat, QPushButton#close, QPushButton#iconButton {
@@ -613,6 +617,17 @@ def icon(name, color=INK, size=22):
     elif name == "search":
         painter.drawEllipse(QPointF(10, 10), 5.1, 5.1)
         line(14, 14, 19, 19)
+    elif name == "tag":
+        path = QPainterPath(QPointF(4.5, 5))
+        path.lineTo(12, 5)
+        path.lineTo(20, 13)
+        path.quadTo(21, 14, 20, 15)
+        path.lineTo(15, 20)
+        path.quadTo(14, 21, 13, 20)
+        path.lineTo(4.5, 12)
+        path.closeSubpath()
+        painter.drawPath(path)
+        painter.drawEllipse(QPointF(8, 8.5), 1, 1)
     elif name == "alert":
         painter.drawEllipse(QPointF(12, 12), 8, 8)
         line(12, 8, 12, 12.6)

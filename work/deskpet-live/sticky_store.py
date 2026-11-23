@@ -11,11 +11,13 @@ import math
 import os
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+from unicodedata import normalize
 from uuid import uuid4
 
 
 MIN_WIDTH, MIN_HEIGHT = 350, 220
 DEFAULT_WIDTH, DEFAULT_HEIGHT = 494, 356
+TAG_NAME_LENGTH = 32
 PASTEL_TONES = {
     "金盏": ("#f0dfa2", "#b78119"),
     "杏橙": ("#f3cdb4", "#bd572e"),
@@ -45,6 +47,24 @@ def normalize_title(value):
     return " ".join(value.split())[:80] if isinstance(value, str) else ""
 
 
+def normalize_tag(value):
+    return " ".join(value.split())[:TAG_NAME_LENGTH] if isinstance(value, str) else ""
+
+
+def tag_key(value):
+    return normalize("NFKC", value).casefold()
+
+
+def normalize_tags(values):
+    tags = {}
+    if isinstance(values, list):
+        for value in values:
+            name = normalize_tag(value)
+            if name:
+                tags.setdefault(tag_key(name), name)
+    return list(tags.values())
+
+
 def finite(value, default):
     return int(value) if isinstance(value, (int, float)) and math.isfinite(value) else default
 
@@ -69,6 +89,7 @@ class Note:
     archived: bool = False
     updatedAt: str = field(default_factory=now)
     textClips: list[dict] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
 
     @property
     def label(self):
@@ -111,6 +132,7 @@ class Note:
             note.textClips = [clip for clip in clips
                               if isinstance(clip, dict) and isinstance(clip.get("content"), str)
                               and isinstance(clip.get("title"), str)]
+        note.tags = normalize_tags(value.get("tags"))
         return note
 
 
