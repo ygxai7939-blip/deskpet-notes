@@ -12,6 +12,10 @@ from PySide6.QtGui import QEnterEvent, QFontDatabase, QMouseEvent, QTextBlockFor
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QPushButton
 
+root = Path(__file__).resolve().parent
+runtime = root.parent / "deskpet-zh"
+sys.path.insert(0, str(runtime))
+
 import desk_workspace
 from desk_style import create_ui_application
 from edge_notes import TAB_STEP
@@ -21,9 +25,6 @@ from pixel_snow import Flake
 from sticky_store import Note, NoteStore
 
 
-root = Path(__file__).resolve().parent
-runtime = root.parent / "deskpet-zh"
-sys.path.insert(0, str(runtime))
 from core import settings
 from platforms.windows.desktop_pet import DesktopPet
 
@@ -573,7 +574,78 @@ with TemporaryDirectory(dir=root) as scratch:
     assert not panel.selection_button.isChecked() and not panel.delete_button.isEnabled()
     assert not {note.id, extra.id}.intersection(NoteStore(path).records)
     assert not {note.id, extra.id}.intersection(studio.windows)
+
+    studio.open_panel(page=1)
+    app.processEvents()
+    studio.select_character(original)
+    active_before = settings.load(settings_file)
+    inspected = []
+
+    def inspect_actions():
+        preview = app.activeModalWidget()
+        if isinstance(preview, desk_workspace.CharacterActions):
+            try:
+                assert preview.pack.pet_id == "qa-character"
+                assert len(preview.choice.options) == 9 and preview.sprite.timer.isActive()
+                preview.choice.select("jumping", notify=True)
+                assert preview.sprite.timer.interval() == 100
+                assert preview.frame_info.text() == "4 帧 · 10 fps"
+                preview.play_button.click()
+                assert not preview.sprite.timer.isActive() and preview.play_button.text() == "播放"
+                preview.play_button.click()
+                assert preview.sprite.timer.isActive()
+                inspected.append(True)
+            finally:
+                preview.reject()
+    def open_action_menu():
+        menu = app.activePopupWidget()
+        if isinstance(menu, desk_workspace.RoundedMenu):
+            action = next(a for a in menu.actions() if a.text() == "动作预览")
+            menu.close()
+            QTimer.singleShot(70, inspect_actions)
+            action.trigger()
+
+    QTimer.singleShot(70, open_action_menu)
+    control = panel.character_grid.cards[imported].more_button
+    QTest.mouseClick(control, Qt.MouseButton.LeftButton, pos=control.rect().center())
+    assert inspected and pet._zip_path == original and settings.load(settings_file) == active_before
+
+    notes_before = path.read_bytes()
+    inactive = read_package(original).as_new(library).install(library)
+    panel.refresh_library()
+    observed = []
+
+    def answer_role_delete(caption):
+        dialog = app.activeModalWidget()
+        if dialog is not None:
+            observed.append(dialog.findChild(desk_workspace.QLabel, "dialogDetail").text())
+            next(control for control in dialog.findChildren(QPushButton) if control.text() == caption).click()
+
+    def remove_role(target, caption="删除角色"):
+        QTimer.singleShot(70, lambda: answer_role_delete(caption))
+        return studio.ask_delete_character(target, read_package(target).name)
+
+    assert remove_role(inactive) and not inactive.exists()
+    assert pet._zip_path == original and "当前使用的角色不会改变" in observed[-1]
+    assert not remove_role(original, "取消")
+    assert original.exists() and pet._zip_path == original and "将切换到「测试角色」" in observed[-1]
+    with patch.object(Path, "unlink", side_effect=PermissionError("test")), \
+         patch.object(desk_workspace, "show_warning") as warning:
+        assert not remove_role(original)
+        warning.assert_called_once()
+        assert original.exists() and pet._zip_path == original
+    assert remove_role(original) and pet._zip_path == duplicate
+    assert panel.character_grid.cards[duplicate].isChecked()
+    assert settings.load(settings_file)["pet_path"] == str(duplicate)
+    studio.select_character(imported)
+    assert remove_role(imported) and pet._zip_path == duplicate
+    assert "将切换到「测试角色」" in observed[-1]
+    assert remove_role(duplicate) and "桌宠会收起" in observed[-1]
+    assert not pet.has_character and not pet.isVisible() and not pet._timer.isActive()
+    assert settings.load(settings_file)["pet_path"] is None and not panel.character_grid.cards
+    assert test_pack.exists() and path.read_bytes() == notes_before
     studio.shutdown()
-print("PASS: multi-character library, switching and same-ID copies, note library and edge visibility, snow compositing and pause, "
+print("PASS: multi-character library, action preview, character deletion and fallback, same-ID copies, "
+      "note library and edge visibility, snow compositing and pause, "
       "paper feed hold and cancel, persisted deletion and undo, save failure rollback, "
       "draggable edge tabs and note reattachment, and confirmed batch selection and deletion")

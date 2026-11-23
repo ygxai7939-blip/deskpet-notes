@@ -17,7 +17,11 @@ QPushButton#characterCard {
 }
 QPushButton#characterCard:hover { background: rgba(62,62,62,96); border-color: #676767; }
 QPushButton#characterCard:checked { background: rgba(59,59,59,119); border-color: #878787; }
-QPushButton#characterCard:focus { border-color: #ababab; }
+QPushButton#characterMore {
+  background: #373737; border: 1px solid #4c4c4c; border-radius: 8px; padding: 0; min-height: 0;
+}
+QPushButton#characterMore:hover { background: #494949; border-color: #676767; }
+QPushButton#characterMore:pressed { background: #515151; }
 QLabel#characterActive {
   color: #ededed; background: #454545; border-radius: 8px; padding: 2px 7px; font-size: 10px;
 }

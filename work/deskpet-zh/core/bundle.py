@@ -9,6 +9,9 @@ import zipfile
 from PIL import Image
 from .constants import TILE_W, TILE_H, COLS, ROWS, ANIM_DEFS
 
+CHARACTER_LOAD_ERRORS = (OSError, ValueError, zipfile.BadZipFile, KeyError, TypeError, AttributeError,
+                         Image.DecompressionBombError)
+
 
 def list_pets(folder: Path) -> list[Path]:
     """Return the installed character bundles in the app's library."""

@@ -84,14 +84,7 @@ class DesktopPet(QWidget):
         self._drag_start_y = 0.0
 
         tw, th = int(TILE_W * scale), int(TILE_H * scale)
-        if zip_path is None:
-            empty = QPixmap(tw, th)
-            empty.fill(Qt.GlobalColor.transparent)
-            self._name = "未导入角色"
-            self._frames = [[empty] for _ in range(ROWS)]
-            self._anims = {name: (row, 1, fps) for name, (row, fps) in ANIM_DEFS.items()}
-        else:
-            self._name, self._frames, self._anims = _load_pet(zip_path, scale)
+        self._name, self._frames, self._anims = self.load_character(zip_path)
         self.setWindowTitle(f"桌面宠物 · {self._name}")
 
         screen = QApplication.primaryScreen().availableGeometry()
@@ -264,11 +257,21 @@ class DesktopPet(QWidget):
 
         return menu
 
-    def _switch_pet(self, zip_path: Path) -> None:
-        name, frames, anims = _load_pet(zip_path, self._scale)
+    def load_character(self, zip_path: Path | None):
+        if zip_path is not None:
+            return _load_pet(zip_path, self._scale)
+        empty = QPixmap(max(1, int(TILE_W * self._scale)), max(1, int(TILE_H * self._scale)))
+        empty.fill(Qt.GlobalColor.transparent)
+        anims = {name: (row, 1, fps) for name, (row, fps) in ANIM_DEFS.items()}
+        return "未导入角色", [[empty] for _ in range(ROWS)], anims
+
+    def _switch_pet(self, zip_path: Path | None, *, loaded=None) -> None:
+        self._name, self._frames, self._anims = self.load_character(zip_path) if loaded is None else loaded
         self._zip_path = zip_path
-        self._name, self._frames, self._anims = name, frames, anims
-        if not self._timer.isActive():
+        if zip_path is None:
+            self._timer.stop()
+            self.hide()
+        elif not self._timer.isActive():
             self._timer.start(TICK_MS)
         self.setWindowTitle(f"桌面宠物 · {self._name}")
         self._ps.enter("idle")

@@ -3,19 +3,20 @@ import ctypes
 from ctypes import wintypes
 from pathlib import Path
 from shutil import copyfile
-from zipfile import BadZipFile
 
 from PySide6.QtCore import QAbstractNativeEventFilter, QEvent, QPoint, QRectF, QTimer, Qt
 from PySide6.QtGui import QColor, QCursor, QImage, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import (
-    QButtonGroup, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
+    QButtonGroup, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
     QPlainTextEdit, QScrollArea, QSizeGrip, QSizePolicy, QSpacerItem, QStackedWidget, QSystemTrayIcon,
     QVBoxLayout, QWidget, QWidgetAction,
 )
 
 from app_version import APP_PUBLISHER
+from core.bundle import CHARACTER_LOAD_ERRORS
+from core.constants import ANIM_DEFS
 from desk_style import (
-    ChoiceButton, DragArea, GlideHighlight, RoundedMenu, SheetDialog, SoftSwitch, STYLE,
+    ChoiceButton, DragArea, GlideHighlight, RoundedMenu, SheetDialog, SoftButton, SoftSwitch, STYLE,
     button, icon, label, show_warning,
 )
 from edge_notes import EdgeNotes
@@ -246,9 +247,11 @@ def character_pixmap(tile, size):
         size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
 
 
-class CharacterCard(QPushButton):
-    def __init__(self, path, activate):
-        super().__init__(objectName="characterCard", checkable=True)
+class CharacterCard(SoftButton):
+    def __init__(self, path, studio):
+        super().__init__("")
+        self.setObjectName("characterCard")
+        self.setCheckable(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         layout = QVBoxLayout(self)
@@ -261,6 +264,10 @@ class CharacterCard(QPushButton):
         badge_size.setRetainSizeWhenHidden(True)
         self.active_badge.setSizePolicy(badge_size)
         badge_row.addWidget(self.active_badge)
+        self.more_button = button("", lambda: studio.character_actions(path, name, self.more_button),
+                                  "characterMore", "more", "角色操作", color="#e6e6e6")
+        self.more_button.setFixedSize(29, 26)
+        badge_row.addWidget(self.more_button)
         layout.addLayout(badge_row)
         sprite = label()
         sprite.setFixedSize(106, 94)
@@ -286,10 +293,11 @@ class CharacterCard(QPushButton):
         layout.addWidget(detail)
         layout.addStretch()
         self.setAccessibleName(name)
+        self.more_button.setAccessibleName(f"{name}的角色操作")
         self.setToolTip(f"{name}\n{description}" if description else name)
         for item in self.findChildren(QLabel):
             item.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self.clicked.connect(lambda: activate(path))
+        self.clicked.connect(lambda: studio.select_character(path))
         self.set_active(False)
 
     def set_active(self, active):
@@ -298,9 +306,9 @@ class CharacterCard(QPushButton):
 
 
 class CharacterGrid(QWidget):
-    def __init__(self, activate):
+    def __init__(self, studio):
         super().__init__()
-        self.activate = activate
+        self.studio = studio
         self.cards = {}
         self.snapshot = None
         self.columns = 0
@@ -319,7 +327,7 @@ class CharacterGrid(QWidget):
         if entries != self.snapshot:
             clear_widgets(self.grid)
             self.snapshot = entries
-            self.cards = {path: CharacterCard(path, self.activate) for path, _, _ in entries}
+            self.cards = {path: CharacterCard(path, self.studio) for path, _, _ in entries}
             self.arrange(self.width(), rebuild=True)
 
     def arrange(self, width, *, rebuild=False):
@@ -342,18 +350,44 @@ class CharacterGrid(QWidget):
             card.set_active(path == active)
 
 
+class SpritePreview(QLabel):
+    def __init__(self, size):
+        super().__init__()
+        self.setFixedSize(size, size)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.advance)
+        self.frames = []
+        self.position = 0
+
+    def set_clip(self, tiles, fps):
+        self.timer.stop()
+        self.frames = [character_pixmap(tile, self.size()) for tile in tiles]
+        self.position = 0
+        self.setPixmap(self.frames[0])
+        self.timer.setInterval(round(1000 / fps))
+        if len(self.frames) > 1:
+            self.timer.start()
+
+    def advance(self):
+        self.position = (self.position + 1) % len(self.frames)
+        self.setPixmap(self.frames[self.position])
+
+
+def preview_surface(player):
+    surface = frame("feature")
+    artwork = QVBoxLayout(surface)
+    artwork.addWidget(player, alignment=Qt.AlignmentFlag.AlignCenter)
+    return surface
+
+
 class CharacterPreview(SheetDialog):
     def __init__(self, pack, updating, parent):
         super().__init__("角色预览", parent)
         self.setMinimumWidth(372)
         self.save_as_new = False
-        surface = frame("feature")
-        artwork = QVBoxLayout(surface)
-        sprite = label()
-        sprite.setFixedSize(136, 140)
-        sprite.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        artwork.addWidget(sprite, alignment=Qt.AlignmentFlag.AlignCenter)
-        self.body.addWidget(surface)
+        sprite = SpritePreview(140)
+        self.body.addWidget(preview_surface(sprite))
         name = label(pack.name, "section")
         name.setWordWrap(True)
         self.body.addWidget(name)
@@ -365,20 +399,8 @@ class CharacterPreview(SheetDialog):
         notice = label(caption, "caption")
         notice.setWordWrap(True)
         self.body.addWidget(notice)
-        pixmaps = [character_pixmap(tile, sprite.size()) for tile in pack.idle_frames]
-        position = 0
-        sprite.setPixmap(pixmaps[position])
-
-        def advance():
-            nonlocal position
-            position = (position + 1) % len(pixmaps)
-            sprite.setPixmap(pixmaps[position])
-
-        self.timer = QTimer(self, interval=165)
-        self.timer.timeout.connect(advance)
-        self.finished.connect(lambda _: self.timer.stop())
-        if len(pixmaps) > 1:
-            self.timer.start()
+        sprite.set_clip(pack.idle_frames, ANIM_DEFS["idle"][1])
+        self.finished.connect(sprite.timer.stop)
         actions = QHBoxLayout()
         actions.addStretch()
         cancel = button("取消", self.reject)
@@ -394,6 +416,54 @@ class CharacterPreview(SheetDialog):
     def accept_as_new(self):
         self.save_as_new = True
         self.accept()
+
+
+class CharacterActions(SheetDialog):
+    ACTIONS = (
+        ("待机", "idle"), ("向右走", "run_right"), ("向左走", "run_left"),
+        ("点击回应", "waving"), ("跳跃", "jumping"), ("失落 / 睡觉", "failed"),
+        ("等待", "waiting"), ("忙碌", "running"), ("好奇", "review"),
+    )
+
+    def __init__(self, pack, parent):
+        super().__init__("动作预览", parent)
+        self.setFixedWidth(416)
+        self.setStyleSheet(STYLE + WORKSPACE_STYLE)
+        self.pack = pack
+        name = label(pack.name, "muted")
+        name.setWordWrap(True)
+        self.body.addWidget(name)
+        self.sprite = SpritePreview(186)
+        self.body.addWidget(preview_surface(self.sprite))
+        controls = QHBoxLayout()
+        self.choice = ChoiceButton("预览动作", self.ACTIONS, self.show_action)
+        controls.addWidget(self.choice)
+        self.frame_info = label("", "caption")
+        controls.addWidget(self.frame_info)
+        controls.addStretch()
+        self.play_button = button("暂停", self.toggle_playback, "secondary")
+        self.play_button.setMinimumWidth(60)
+        controls.addWidget(self.play_button)
+        self.body.addLayout(controls)
+        self.show_action(self.choice.value)
+        self.finished.connect(self.sprite.timer.stop)
+
+    def show_action(self, action):
+        row, fps = ANIM_DEFS[action]
+        frames = self.pack.action_frames(row)
+        self.sprite.set_clip(frames, fps)
+        animated = len(frames) > 1
+        self.frame_info.setText(f"{len(frames)} 帧 · {fps} fps" if animated else "单帧")
+        self.play_button.setEnabled(animated)
+        self.play_button.setText("暂停" if animated else "播放")
+
+    def toggle_playback(self):
+        if self.sprite.timer.isActive():
+            self.sprite.timer.stop()
+            self.play_button.setText("播放")
+        else:
+            self.sprite.timer.start()
+            self.play_button.setText("暂停")
 
 
 class Workspace(QWidget):
@@ -685,7 +755,7 @@ class Workspace(QWidget):
         library_header.addWidget(button("导入角色 ZIP", self.studio.choose_character_file, "characterControl",
                                         "plus", "导入角色 ZIP，也可拖入此窗口", color="#dedede"))
         root.addLayout(library_header)
-        self.character_grid = CharacterGrid(self.studio.select_character)
+        self.character_grid = CharacterGrid(self.studio)
         root.addWidget(self.character_grid)
         self.empty_library = label("把角色 ZIP 拖到这里，或点击「导入角色 ZIP」", "characterEmpty")
         self.empty_library.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -1183,6 +1253,87 @@ class DeskWorkspace:
         if selected:
             self.inspect_character(Path(selected))
 
+    def character_actions(self, path, name, anchor):
+        menu = RoundedMenu(anchor)
+        menu.addAction("动作预览", lambda: self.preview_character_actions(path))
+        menu.addSeparator()
+        menu.addAction(icon("trash", "#dedede", 17), "删除角色",
+                       lambda: self.ask_delete_character(path, name))
+        try:
+            menu.exec(anchor.mapToGlobal(QPoint(0, anchor.height() + 4)))
+        finally:
+            menu.deleteLater()
+
+    def preview_character_actions(self, path):
+        try:
+            package = read_package(path)
+        except ValueError as error:
+            show_warning(self.panel, "无法预览角色", str(error))
+            return
+        preview = CharacterActions(package, self.panel)
+        try:
+            preview.exec()
+        finally:
+            preview.deleteLater()
+
+    def ask_delete_character(self, path, name):
+        paths = self.pet.character_paths()
+        if path not in paths:
+            self.panel.refresh_library()
+            return False
+
+        active = path == self.pet._zip_path
+        next_path, next_character = None, None
+        if active:
+            index = paths.index(path)
+            for candidate in (*paths[index + 1:], *reversed(paths[:index])):
+                try:
+                    next_character = self.pet.load_character(candidate)
+                except CHARACTER_LOAD_ERRORS:
+                    continue
+                next_path = candidate
+                break
+            if next_path is not None:
+                outcome = f"删除后将切换到「{next_character[0]}」。"
+            else:
+                outcome = "删除后没有可使用的角色，桌宠会收起。"
+        else:
+            outcome = "当前使用的角色不会改变。"
+
+        dialog = SheetDialog("删除角色", self.panel)
+        dialog.setFixedWidth(416)
+        prompt = label(f"要删除「{name}」吗？", "dialogBody")
+        prompt.setWordWrap(True)
+        dialog.body.addWidget(prompt)
+        detail = label(outcome + "\n将移除角色库中的 ZIP。其他位置的 ZIP 和便签会保留。", "dialogDetail")
+        detail.setWordWrap(True)
+        dialog.body.addWidget(detail)
+        actions = QHBoxLayout()
+        actions.addStretch()
+        cancel = button("取消", dialog.reject, "secondary")
+        cancel.setDefault(True)
+        actions.addWidget(cancel)
+        actions.addWidget(button("删除角色", dialog.accept, "danger"))
+        dialog.body.addLayout(actions)
+        try:
+            accepted = bool(dialog.exec())
+        finally:
+            dialog.deleteLater()
+        if not accepted:
+            return False
+
+        try:
+            path.unlink()
+        except OSError as error:
+            show_warning(self.panel, "角色删除失败", str(error))
+            return False
+        if active:
+            self.paper_feed.cancel()
+            self.pet._switch_pet(next_path, loaded=next_character)
+        self.panel.refresh_library()
+        self.refresh_tray()
+        return True
+
     def export_character_toolkit(self):
         root = Path(__file__).resolve().parent
         source = root / "角色制作工具包.zip"
@@ -1219,7 +1370,7 @@ class DeskWorkspace:
                 self.paper_feed.cancel()
                 self.pet._switch_pet(path)
             self.pet.show()
-        except (OSError, ValueError, BadZipFile, KeyError, TypeError) as error:
+        except CHARACTER_LOAD_ERRORS as error:
             show_warning(self.panel, "角色切换失败", str(error))
         self.panel.refresh_character()
         self.refresh_tray()

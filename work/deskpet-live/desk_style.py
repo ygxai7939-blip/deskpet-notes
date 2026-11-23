@@ -414,7 +414,7 @@ class SoftButton(QPushButton):
         if self.hasFocus() and self.keyboard_focus:
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             painter.setPen(Qt.PenStyle.NoPen)
-            light = self.objectName().startswith("library") or self.objectName() in {"primary", "danger"}
+            light = self.objectName().startswith(("library", "character")) or self.objectName() in {"primary", "danger"}
             shade = 255 if light else 0
             painter.setBrush(QColor(shade, shade, shade, 36))
             painter.drawRoundedRect(QRectF(self.rect()).adjusted(1, 1, -1, -1), 9, 9)

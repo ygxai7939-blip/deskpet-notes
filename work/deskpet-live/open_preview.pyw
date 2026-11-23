@@ -61,7 +61,6 @@ def snapshot(studio):
 def run():
     from PySide6.QtCore import QLockFile, QTimer
     from desk_style import create_ui_application
-    from desk_workspace import DeskWorkspace
 
     DATA.mkdir(parents=True, exist_ok=True)
     lock = QLockFile(str(DATA / ".deskpet.lock"))
@@ -74,7 +73,8 @@ def run():
     if not FROZEN:
         sys.path.insert(0, str(RUNTIME))
     from core import settings
-    from core.bundle import list_pets
+    from core.bundle import CHARACTER_LOAD_ERRORS
+    from desk_workspace import DeskWorkspace
     from platforms.windows.desktop_pet import DesktopPet
 
     app = create_ui_application("DeskPet")
@@ -82,21 +82,26 @@ def run():
     app.setApplicationVersion(APP_VERSION)
     app.setQuitOnLastWindowClosed(False)
     preferences = settings.load(SETTINGS_FILE)
-    installed = list_pets(LIBRARY)
     previous = preferences.get("pet_path")
     saved = Path(previous).resolve() if isinstance(previous, str) and previous else None
-    selected = next((path for path in (saved, PACK) if path in installed), None)
-    if selected is None and installed:
-        selected = installed[0]
-    preferences["pet_path"] = str(selected) if selected is not None else None
-    settings.save(SETTINGS_FILE, preferences)
-    widget = DesktopPet(selected, preferences["pet_scale"], preferences, library=LIBRARY,
+    widget = DesktopPet(None, preferences["pet_scale"], preferences, library=LIBRARY,
                         settings_file=SETTINGS_FILE, launch_script=Path(__file__).resolve(),
                         startup_file=(Path(os.environ["APPDATA"]) / "Microsoft/Windows/Start Menu/Programs/Startup/DeskPetNotes.bat")
                         if FROZEN else None)
-    if widget.has_character:
+    installed = widget.character_paths()
+    for chosen in dict.fromkeys((saved, PACK, *installed)):
+        if chosen not in installed:
+            continue
+        try:
+            loaded = widget.load_character(chosen)
+        except CHARACTER_LOAD_ERRORS:
+            continue
+        widget._switch_pet(chosen, loaded=loaded)
         widget.show()
         restore_position(widget)
+        break
+    else:
+        widget._switch_pet(None)
     studio = DeskWorkspace(app, widget, DATA / "settings" / "notes.json")
     if not widget.has_character or "--show-settings" in sys.argv[1:]:
         studio.panel.change_page(1)

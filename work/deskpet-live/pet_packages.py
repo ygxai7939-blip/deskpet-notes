@@ -35,7 +35,20 @@ class CharacterPackage:
     name: str
     description: str
     atlas: Image.Image
-    idle_frames: tuple[Image.Image, ...]
+
+    @property
+    def idle_frames(self):
+        return self.action_frames(0)
+
+    def action_frames(self, row):
+        frames = []
+        y = row * CELL_HEIGHT
+        for x in range(0, self.atlas.width, CELL_WIDTH):
+            tile = self.atlas.crop((x, y, x + CELL_WIDTH, y + CELL_HEIGHT))
+            if tile.getchannel("A").getextrema()[1] <= 10:
+                break
+            frames.append(tile)
+        return tuple(frames)
 
     def target(self, folder):
         return folder / f"{self.pet_id}.codex-pet.zip"
@@ -143,13 +156,7 @@ def read_package(source):
         for row in range(9):
             first = sheet.crop((0, row * CELL_HEIGHT, CELL_WIDTH, (row + 1) * CELL_HEIGHT))
             require(first.getchannel("A").getextrema()[1] > 10, f"第 {row+1} 行缺少首帧。")
-        idle = []
-        for column in range(8):
-            frame = sheet.crop((column * CELL_WIDTH, 0, (column + 1) * CELL_WIDTH, CELL_HEIGHT))
-            if frame.getchannel("A").getextrema()[1] <= 10:
-                break
-            idle.append(frame)
-        return CharacterPackage(key, name, description, sheet, tuple(idle))
+        return CharacterPackage(key, name, description, sheet)
     except (OSError, BadZipFile, UnicodeError, RuntimeError, RecursionError, NotImplementedError,
             Image.DecompressionBombError, UnidentifiedImageError) as exc:
         raise ValueError("角色 ZIP 或图集无法读取。") from exc
