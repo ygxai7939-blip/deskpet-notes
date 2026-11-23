@@ -26,6 +26,7 @@ from sticky_store import Note, NoteStore
 
 
 from core import settings
+from data_backup import stage_backup
 from platforms.windows.desktop_pet import DesktopPet
 
 app = create_ui_application("DeskPet notes smoke")
@@ -35,8 +36,8 @@ QFontDatabase.addApplicationFont("C:/Windows/Fonts/msyhbd.ttc")
 app.setQuitOnLastWindowClosed(False)
 with TemporaryDirectory(dir=root) as scratch:
     scratch = Path(scratch)
-    path = scratch / "notes.json"
-    settings_file = scratch / "pet-settings.json"
+    path = scratch / "settings" / "notes.json"
+    settings_file = scratch / "settings" / "settings.json"
     startup_file = scratch / "startup" / "DeskPet.bat"
     library = scratch / "library"
     library.mkdir()
@@ -644,8 +645,63 @@ with TemporaryDirectory(dir=root) as scratch:
     assert not pet.has_character and not pet.isVisible() and not pet._timer.isActive()
     assert settings.load(settings_file)["pet_path"] is None and not panel.character_grid.cards
     assert test_pack.exists() and path.read_bytes() == notes_before
+
+    verified_role = read_package(test_pack).install(library)
+    studio.select_character(verified_role)
+    pet._apply_scale(.75)
+    pet._apply_personality("focused")
+    archived = Note(title="备份测试", visible=False, archived=True, color="薄荷",
+                    textContent="已完成", richContent='<ul><li class="checked">已完成</li></ul>')
+    studio.store.records[archived.id] = archived
+    studio.changed()
+    archive_path = scratch / "deskpet-backup.zip"
+    actions = {control.text(): control for control in panel.findChildren(QPushButton)}
+    with patch.object(desk_workspace, "pick_file", return_value=str(archive_path)), \
+         patch.object(desk_workspace, "show_warning") as message:
+        actions["导出备份"].click()
+        message.assert_called_once()
+        assert message.call_args.args[1] == "备份已导出"
+    assert archive_path.is_file()
+    expected_count = len(studio.store.records)
+    expected_settings = settings.load(settings_file)
+    archived.archived = False
+    archived.title = "替换前的记录"
+    studio.changed()
+    assert studio.flush()
+    in_use_before = path.read_bytes()
+    pet._apply_scale(.25)
+    previewed = []
+
+    def answer_restore(text):
+        dialog = app.activeModalWidget()
+        if dialog is not None:
+            previewed.append([item.text() for item in dialog.findChildren(desk_workspace.QLabel)])
+            next(control for control in dialog.findChildren(QPushButton) if control.text() == text).click()
+
+    with patch.object(desk_workspace, "pick_file", return_value=str(archive_path)), \
+         patch.object(desk_workspace, "show_warning") as message:
+        QTimer.singleShot(70, lambda: answer_restore("取消"))
+        actions["从备份还原"].click()
+        assert path.read_bytes() == in_use_before and not (scratch / "backups").exists()
+        assert any(f"{expected_count} 张便签" in text and "1 个角色" in text for text in previewed[-1])
+        assert any("会替换当前" in text for text in previewed[-1])
+        QTimer.singleShot(70, lambda: answer_restore("确认还原"))
+        actions["从备份还原"].click()
+        message.assert_called_once()
+        assert message.call_args.args[1] == "备份已还原"
+    restored = NoteStore(path).records[archived.id]
+    assert restored.archived and restored.title == "备份测试"
+    assert restored.textContent == "已完成" and 'class="checked"' in restored.richContent
+    assert restored.color == "薄荷" and pet._zip_path == verified_role
+    assert pet._scale == expected_settings["pet_scale"] == .75
+    assert pet._ps.personality == expected_settings["personality_style"] == "focused"
+    with TemporaryDirectory(dir=scratch) as safety_temp:
+        safety_zip, = (scratch / "backups").glob("还原前备份-*.zip")
+        previous = stage_backup(safety_zip, Path(safety_temp))
+        assert previous.records[archived.id].title == "替换前的记录"
+        assert previous.preferences["pet_scale"] == .25
     studio.shutdown()
 print("PASS: multi-character library, action preview, character deletion and fallback, same-ID copies, "
       "note library and edge visibility, snow compositing and pause, "
       "paper feed hold and cancel, persisted deletion and undo, save failure rollback, "
-      "draggable edge tabs and note reattachment, and confirmed batch selection and deletion")
+      "draggable edge tabs and note reattachment, batch deletion, and portable backup and restore")

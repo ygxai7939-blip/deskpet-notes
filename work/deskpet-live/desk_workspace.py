@@ -4,7 +4,7 @@ from ctypes import wintypes
 from pathlib import Path
 from shutil import copyfile
 
-from PySide6.QtCore import QAbstractNativeEventFilter, QEvent, QPoint, QRectF, QTimer, Qt
+from PySide6.QtCore import QAbstractNativeEventFilter, QEvent, QPoint, QRect, QRectF, QTimer, Qt
 from PySide6.QtGui import QColor, QCursor, QImage, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import (
     QButtonGroup, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
@@ -15,6 +15,9 @@ from PySide6.QtWidgets import (
 from app_version import APP_PUBLISHER
 from core.bundle import CHARACTER_LOAD_ERRORS
 from core.constants import ANIM_DEFS
+from data_backup import (
+    RestorePendingError, apply_backup, backup_filename, stage_backup, staging_folder, write_backup,
+)
 from desk_style import (
     ChoiceButton, DragArea, GlideHighlight, RoundedMenu, SheetDialog, SoftButton, SoftSwitch, STYLE,
     button, icon, label, show_warning,
@@ -25,7 +28,7 @@ from paper_feed import PaperFeed
 from pet_packages import read_package
 from pixel_snow import PixelSnow
 from sticky_store import Note, NoteStore
-from sticky_window import StickyWindow
+from sticky_window import StickyWindow, fit_to_desktop
 from workspace_style import WORKSPACE_STYLE
 
 
@@ -787,6 +790,18 @@ class Workspace(QWidget):
         self.pet_options["moving"] = moving
         grid.addWidget(moving, alignment=Qt.AlignmentFlag.AlignLeft)
         root.addWidget(settings)
+
+        root.addWidget(label("备份与恢复", "libraryTitle"))
+        backup = frame("characterBehavior")
+        actions = QHBoxLayout(backup)
+        actions.setContentsMargins(14, 12, 14, 12)
+        actions.setSpacing(8)
+        caption = label("便签、桌宠和设置一起带走。", "libraryMeta")
+        caption.setWordWrap(True)
+        actions.addWidget(caption, 1)
+        actions.addWidget(button("导出备份", self.studio.export_backup, "characterControl"))
+        actions.addWidget(button("从备份还原", self.studio.restore_backup, "characterControl"))
+        root.addWidget(backup)
         root.addStretch()
         return page
 
@@ -1345,6 +1360,116 @@ class DeskWorkspace:
                 copyfile(source, selected)
             except OSError as error:
                 show_warning(self.panel, "工具包导出失败", str(error))
+
+    def save_backup_file(self, destination):
+        write_backup(destination, self.store.records, self.pet.backup_preferences(),
+                     self.pet.character_paths(), self.pet._zip_path)
+
+    def export_backup(self):
+        chosen = pick_file(self.panel, "导出备份", "桌宠便签备份 (*.zip)", suggested_name=backup_filename())
+        if not chosen or not self.flush():
+            return
+        destination = Path(chosen)
+        try:
+            if destination.suffix.lower() != ".zip":
+                raise ValueError("备份文件名请使用 .zip 后缀。")
+            if destination.resolve().is_relative_to(self.pet.library.resolve()):
+                raise ValueError("请把备份保存到角色库以外的文件夹。")
+            self.save_backup_file(destination)
+        except (OSError, ValueError) as error:
+            show_warning(self.panel, "导出备份失败", str(error))
+            return
+        show_warning(self.panel, "备份已导出", str(destination))
+
+    def confirm_restore(self, snapshot):
+        dialog = SheetDialog("从备份还原", self.panel)
+        dialog.setFixedWidth(408)
+        date = snapshot.created_at.astimezone().strftime("%Y-%m-%d %H:%M")
+        dialog.body.addWidget(label(f"{len(snapshot.records)} 张便签  ·  {len(snapshot.roles)} 个角色", "section"))
+        dialog.body.addWidget(label(f"备份日期  {date}", "muted"))
+        warning = label("整套还原会替换当前的便签、角色和设置。确认后会先自动保存一份还原前备份。", "dialogBody")
+        warning.setWordWrap(True)
+        dialog.body.addWidget(warning)
+        row = QHBoxLayout()
+        row.addStretch()
+        cancel = button("取消", dialog.reject, "secondary")
+        cancel.setDefault(True)
+        row.addWidget(cancel)
+        row.addWidget(button("确认还原", dialog.accept, "danger"))
+        dialog.body.addLayout(row)
+        try:
+            return bool(dialog.exec())
+        finally:
+            dialog.deleteLater()
+
+    def fit_restored_notes(self, records):
+        screens = {screen.name(): screen for screen in self.app.screens()}
+        primary = self.app.primaryScreen()
+        # Keep imported integers in range before constructing Qt geometry.
+        limit = 1 << 28
+        for note in records.values():
+            x, y = (max(-limit, min(limit, value)) for value in (note.x, note.y))
+            screen = screens.get(note.edgeScreen) or self.app.screenAt(QPoint(x, y)) or primary
+            rect = fit_to_desktop(QRect(x, y, min(limit, note.width), min(limit, note.height)), screen)
+            note.x, note.y, note.width, note.height = rect.getRect()
+            if note.edge:
+                note.edgeScreen = screen.name()
+
+    def restore_backup(self):
+        chosen = pick_file(self.panel, "选择桌宠便签备份", "桌宠便签备份 (*.zip)")
+        if not chosen:
+            return
+        data_dir = self.pet.library.parent
+        try:
+            with staging_folder(data_dir) as folder:
+                snapshot = stage_backup(Path(chosen), Path(folder))
+                if not self.confirm_restore(snapshot) or not self.flush():
+                    return
+                self.fit_restored_notes(snapshot.records)
+                incoming = snapshot.root / "incoming" / "library"
+                selected = snapshot.selected
+                loaded = self.pet.load_character(incoming / selected if selected else None,
+                                                 scale=snapshot.preferences["pet_scale"])
+                safety_folder = data_dir / "backups"
+                safety_folder.mkdir(exist_ok=True)
+                safety = safety_folder / backup_filename("还原前备份", unique=True)
+                self.save_backup_file(safety)
+                apply_backup(data_dir, snapshot)
+        except RestorePendingError as error:
+            show_warning(self.panel, "还原中断", str(error))
+            self.app.quit()
+            return
+        except CHARACTER_LOAD_ERRORS as error:
+            show_warning(self.panel, "无法还原备份", str(error))
+            return
+        self.reload_restored_data(snapshot, loaded)
+        show_warning(self.panel, "备份已还原", f"还原前的数据已保存在\n{safety}")
+
+    def reload_restored_data(self, snapshot, loaded):
+        self.paper_feed.cancel()
+        self.hide_feed_undo()
+        self.last_fed_note = None
+        self.edge_notes.hide()
+        for note in self.store.records.values():
+            self.close_note_window(note)
+        self.store.records = snapshot.records
+        self.current_id = None
+        self.commit.stop()
+        self.dirty = False
+        selected = self.pet.library / snapshot.selected if snapshot.selected else None
+        self.pet.apply_restored_preferences(snapshot.preferences, selected, loaded)
+        self.edge_notes.load_layout()
+        self.edge_notes.refresh()
+        for note in self.active_notes():
+            if note.visible:
+                self.show_note(note, focus=False)
+        self.panel.character_grid.snapshot = None
+        self.panel.refresh_library()
+        self.panel.selected_note_id = None
+        self.panel.selection_button.setChecked(False)
+        self.panel.checked_notes.clear()
+        self.refresh_notes()
+        self.refresh_tray()
 
     def inspect_character(self, path):
         try:

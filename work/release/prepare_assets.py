@@ -84,7 +84,7 @@ def stage(toolkit, dist):
     ):
         copyfile(src, notices / name)
 
-    app_sources = ("app_version.py", "desk_style.py", "desk_workspace.py", "edge_drag.py", "edge_notes.py",
+    app_sources = ("app_version.py", "data_backup.py", "desk_style.py", "desk_workspace.py", "edge_drag.py", "edge_notes.py",
                    "file_picker.py", "open_preview.pyw", "paper_feed.py", "pet_packages.py", "pixel_snow.py",
                    "sticky_store.py", "sticky_window.py", "verify_notes.py", "workspace_style.py",
                    "DeskStickyNotes-MIT.txt")

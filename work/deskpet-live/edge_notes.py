@@ -219,17 +219,20 @@ class EdgeNotes:
         self.studio = studio
         self.rails = {}
         self.drag_preview = EdgeDragPreview()
-        layout = studio.pet.preference(LAYOUT_PREFERENCE)
-        self.layout = layout if isinstance(layout, dict) else {}
-        anchors = self.layout.get("anchors")
-        self.anchors = {name: sides.copy() for name, sides in anchors.items() if isinstance(sides, dict)} \
-            if isinstance(anchors, dict) else {}
+        self.load_layout()
         app = studio.app
         app.screenAdded.connect(self.watch_screen)
         app.screenRemoved.connect(lambda _: QTimer.singleShot(0, self.refresh))
         app.primaryScreenChanged.connect(lambda _: self.refresh())
         for screen in app.screens():
             self.watch_screen(screen)
+
+    def load_layout(self):
+        layout = self.studio.pet.preference(LAYOUT_PREFERENCE)
+        self.layout = layout if isinstance(layout, dict) else {}
+        anchors = self.layout.get("anchors")
+        self.anchors = {name: sides.copy() for name, sides in anchors.items() if isinstance(sides, dict)} \
+            if isinstance(anchors, dict) else {}
 
     def watch_screen(self, screen):
         screen.availableGeometryChanged.connect(lambda _: self.refresh())

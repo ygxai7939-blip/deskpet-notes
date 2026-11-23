@@ -257,15 +257,16 @@ class DesktopPet(QWidget):
 
         return menu
 
-    def load_character(self, zip_path: Path | None):
+    def load_character(self, zip_path: Path | None, *, scale=None):
+        scale = self._scale if scale is None else scale
         if zip_path is not None:
-            return _load_pet(zip_path, self._scale)
-        empty = QPixmap(max(1, int(TILE_W * self._scale)), max(1, int(TILE_H * self._scale)))
+            return _load_pet(zip_path, scale)
+        empty = QPixmap(max(1, int(TILE_W * scale)), max(1, int(TILE_H * scale)))
         empty.fill(Qt.GlobalColor.transparent)
         anims = {name: (row, 1, fps) for name, (row, fps) in ANIM_DEFS.items()}
         return "未导入角色", [[empty] for _ in range(ROWS)], anims
 
-    def _switch_pet(self, zip_path: Path | None, *, loaded=None) -> None:
+    def _switch_pet(self, zip_path: Path | None, *, loaded=None, persist=True) -> None:
         self._name, self._frames, self._anims = self.load_character(zip_path) if loaded is None else loaded
         self._zip_path = zip_path
         if zip_path is None:
@@ -276,19 +277,34 @@ class DesktopPet(QWidget):
         self.setWindowTitle(f"桌面宠物 · {self._name}")
         self._ps.enter("idle")
         self.update()
-        self._save_settings()
+        if persist:
+            self._save_settings()
         self.character_changed.emit()
 
     def _apply_scale(self, scale: float) -> None:
-        self._scale = scale
-        tw, th = int(TILE_W * scale), int(TILE_H * scale)
         if self._zip_path is not None:
             self._name, self._frames, self._anims = _load_pet(self._zip_path, scale)
+        self.resize_character(scale)
+        self._save_settings()
+
+    def resize_character(self, scale):
+        self._scale = scale
+        tw, th = int(TILE_W * scale), int(TILE_H * scale)
         self._ps.resize(tw, th)
         self.setFixedSize(tw, th)
         self.move(int(self._ps.x), int(self._ps.y))
         self.update()
-        self._save_settings()
+
+    def backup_preferences(self):
+        return self._settings.copy()
+
+    def apply_restored_preferences(self, preferences, path, loaded):
+        self._settings = preferences
+        self._ps.set_personality(preferences["personality_style"])
+        self._ps.set_moving(preferences["movement_enabled"])
+        self.resize_character(preferences["pet_scale"])
+        self._switch_pet(path, loaded=loaded, persist=False)
+        self.setVisible(path is not None)
 
     def _apply_personality(self, name: str) -> None:
         self._ps.set_personality(name)

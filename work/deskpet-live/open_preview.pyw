@@ -69,6 +69,8 @@ def run():
     if not lock.tryLock(100):
         activation.touch()
         return 0
+    from data_backup import recover_restore
+    recover_restore(DATA)
     LIBRARY.mkdir(exist_ok=True)
     if not FROZEN:
         sys.path.insert(0, str(RUNTIME))
