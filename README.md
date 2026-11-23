@@ -42,4 +42,4 @@ py -3.12 -m venv .\work\venv
 
 1.1.1 的完整发行版和 Ygxai 有权授权的新增内容按 [PolyForm Noncommercial 1.0.0](LICENSE) 提供，仅限非商业用途。商用须获得 Ygxai 的另行授权。适用范围见 [NOTICE](NOTICE)。
 
-第三方组件继续适用[原许可证](work/release/第三方许可.md)，已经按 [Apache-2.0 发布的 1.1.0](https://github.com/ygxai7939-blip/deskpet-notes/blob/v1.1.0/LICENSE) 也继续适用原条款。用户导入的角色素材由其创作者或权利人决定使用条件。
+第三方组件继续适用[原许可证](work/release/第三方许可.md)。已经按 [Apache-2.0](LICENSE-APACHE-2.0.txt) 发布的历史代码继续适用原条款。用户导入的角色素材由其创作者或权利人决定使用条件。
