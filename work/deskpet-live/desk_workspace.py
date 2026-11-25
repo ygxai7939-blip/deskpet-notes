@@ -5,7 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 from shutil import copyfile
 
-from PySide6.QtCore import QAbstractNativeEventFilter, QEvent, QPoint, QRect, QRectF, QTimer, Qt
+from PySide6.QtCore import QAbstractNativeEventFilter, QEvent, QPoint, QRect, QRectF, QTimer, Qt, Signal
 from PySide6.QtGui import QColor, QCursor, QImage, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import (
     QButtonGroup, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
@@ -15,7 +15,6 @@ from PySide6.QtWidgets import (
 
 from app_version import APP_PUBLISHER
 from core.bundle import CHARACTER_LOAD_ERRORS
-from core.constants import ANIM_DEFS
 from data_backup import (
     RestorePendingError, apply_backup, backup_filename, stage_backup, staging_folder, write_backup,
 )
@@ -462,6 +461,8 @@ class CharacterGrid(QWidget):
 
 
 class SpritePreview(QLabel):
+    finished = Signal()
+
     def __init__(self, size):
         super().__init__()
         self.setFixedSize(size, size)
@@ -470,17 +471,29 @@ class SpritePreview(QLabel):
         self.timer.timeout.connect(self.advance)
         self.frames = []
         self.position = 0
+        self.loop = True
+        self.ended = False
 
-    def set_clip(self, tiles, fps):
+    def set_clip(self, tiles, fps, *, loop=True):
         self.timer.stop()
         self.frames = [character_pixmap(tile, self.size()) for tile in tiles]
-        self.position = 0
-        self.setPixmap(self.frames[0])
+        self.loop = loop
         self.timer.setInterval(round(1000 / fps))
+        self.restart()
+
+    def restart(self):
+        self.position = 0
+        self.ended = False
+        self.setPixmap(self.frames[0])
         if len(self.frames) > 1:
             self.timer.start()
 
     def advance(self):
+        if not self.loop and self.position == len(self.frames) - 1:
+            self.timer.stop()
+            self.ended = True
+            self.finished.emit()
+            return
         self.position = (self.position + 1) % len(self.frames)
         self.setPixmap(self.frames[self.position])
 
@@ -510,7 +523,7 @@ class CharacterPreview(SheetDialog):
         notice = label(caption, "caption")
         notice.setWordWrap(True)
         self.body.addWidget(notice)
-        sprite.set_clip(pack.idle_frames, ANIM_DEFS["idle"][1])
+        sprite.set_clip(pack.idle_frames, pack.animations["idle"][2])
         self.finished.connect(sprite.timer.stop)
         actions = QHBoxLayout()
         actions.addStretch()
@@ -534,6 +547,9 @@ class CharacterActions(SheetDialog):
         ("待机", "idle"), ("向右走", "run_right"), ("向左走", "run_left"),
         ("点击回应", "waving"), ("跳跃", "jumping"), ("失落 / 睡觉", "failed"),
         ("等待", "waiting"), ("忙碌", "running"), ("好奇", "review"),
+        ("摸头", "petting"), ("被提起", "lifted"), ("放下", "landing"),
+        ("睡觉", "sleeping"), ("醒来", "waking"), ("伸懒腰", "stretching"),
+        ("庆祝", "celebrate"), ("张嘴", "feed_open"), ("接纸团", "feed_ready"),
     )
 
     def __init__(self, pack, parent):
@@ -547,12 +563,14 @@ class CharacterActions(SheetDialog):
         self.sprite = SpritePreview(186)
         self.body.addWidget(preview_surface(self.sprite))
         controls = QHBoxLayout()
-        self.choice = ChoiceButton("预览动作", self.ACTIONS, self.show_action)
+        options = [(label, action) for label, action in self.ACTIONS if action in pack.animations]
+        self.choice = ChoiceButton("预览动作", options, self.show_action)
         controls.addWidget(self.choice)
         self.frame_info = label("", "caption")
         controls.addWidget(self.frame_info)
         controls.addStretch()
         self.play_button = button("暂停", self.toggle_playback, "secondary")
+        self.sprite.finished.connect(lambda: self.play_button.setText("重播"))
         self.play_button.setMinimumWidth(60)
         controls.addWidget(self.play_button)
         self.body.addLayout(controls)
@@ -560,9 +578,10 @@ class CharacterActions(SheetDialog):
         self.finished.connect(self.sprite.timer.stop)
 
     def show_action(self, action):
-        row, fps = ANIM_DEFS[action]
-        frames = self.pack.action_frames(row)
-        self.sprite.set_clip(frames, fps)
+        _, _, fps = self.pack.animations[action]
+        frames = self.pack.action_frames(action)
+        loop = action in ("idle", "run_left", "run_right", "lifted", "sleeping", "running")
+        self.sprite.set_clip(frames, fps, loop=loop)
         animated = len(frames) > 1
         self.frame_info.setText(f"{len(frames)} 帧 · {fps} fps" if animated else "单帧")
         self.play_button.setEnabled(animated)
@@ -573,7 +592,10 @@ class CharacterActions(SheetDialog):
             self.sprite.timer.stop()
             self.play_button.setText("播放")
         else:
-            self.sprite.timer.start()
+            if self.sprite.ended:
+                self.sprite.restart()
+            else:
+                self.sprite.timer.start()
             self.play_button.setText("暂停")
 
 

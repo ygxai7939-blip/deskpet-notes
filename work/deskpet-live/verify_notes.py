@@ -1,12 +1,14 @@
 """Smoke test the integrated Windows UI with test-only note data."""
 from pathlib import Path
 from shutil import copyfile
+from io import BytesIO
 import json
 import sys
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 from zipfile import ZipFile
 
+from PIL import Image, ImageDraw
 from PySide6.QtCore import QEvent, QPoint, QPointF, QTimer, Qt, QVariantAnimation
 from PySide6.QtGui import QEnterEvent, QFontDatabase, QMouseEvent, QTextBlockFormat, QTextCursor, QTextDocument
 from PySide6.QtTest import QTest
@@ -20,15 +22,164 @@ import desk_workspace
 from desk_style import create_ui_application
 from edge_notes import TAB_STEP
 from paper_feed import HOLD_MS, SWALLOW_MS
-from pet_packages import read_package
+from pet_packages import HD_CELL, LEGACY_ACTIONS, read_package
 from pixel_snow import Flake
 from sticky_store import Note, NoteStore, tag_key
 
 
 from core import settings
+from core.state import PetState
 from data_backup import stage_backup
 from platforms.windows.desktop_pet import DesktopPet
 
+
+def verify_playback():
+    anims = {name: (row, 6 if name == "idle" else 4, fps)
+             for name, (row, fps) in LEGACY_ACTIONS.items()}
+    pet_state = PetState(0, 0, 800, 600, 96, 104, anims=anims)
+    pet_state.tick(.34)
+    assert pet_state.fidx == 2
+    pet_state.enter("idle")
+    assert pet_state.fidx == 2
+    pet_state.tick(.16)
+    assert pet_state.fidx == 3
+    pet_state.on_release()
+    pet_state.tick(.22)
+    pet_state.on_release()
+    pet_state.tick(.27)
+    assert pet_state.anim == "waving" and pet_state.fidx == 3
+    pet_state.tick(.01)
+    assert pet_state.anim == "idle" and pet_state.fidx == 0
+    pet_state.enter("sleeping")
+    pet_state.tick(2.0)
+    assert pet_state.anim == "failed" and pet_state.fidx == 3
+    pet_state.on_release()
+    assert pet_state.anim == "waiting"
+    assert not pet_state.can_pet
+    pet_state.on_release("petting")
+    assert pet_state.anim == "review"
+    pet_state.on_drag_start()
+    pet_state.tick(.9)
+    assert pet_state.anim == "jumping" and pet_state.fidx == 2
+    pet_state.on_release()
+    assert pet_state.anim == "jumping" and pet_state.fidx == 2
+    pet_state.tick(.11)
+    assert pet_state.anim == "jumping" and pet_state.fidx == 3
+    pet_state.tick(.10)
+    assert pet_state.anim == "idle"
+    x, y = pet_state.x, pet_state.y
+    pet_state.update_cursor(x + 1, y - 100)
+    pet_state.enter("chasing")
+    pet_state.tick(.20)
+    pet_state.update_cursor(pet_state.x - 1, y - 100)
+    pet_state.tick(.01)
+    assert pet_state.anim == "run_right" and pet_state.fidx == 2
+    pet_state.update_cursor(pet_state.x - 100, y - 100)
+    pet_state.tick(.01)
+    assert pet_state.anim == "run_left" and pet_state.fidx == 2
+
+
+def make_hd_role(destination):
+    actions = {action: {"row": row, "frames": 10 if action == "waving" else 3, "fps": fps}
+               for action, (row, fps) in LEGACY_ACTIONS.items()}
+    for action in ("petting", "lifted", "landing", "waking", "celebrate"):
+        actions[action] = {"row": len(actions), "frames": 3, "fps": 10}
+    width, height = HD_CELL
+    image = Image.new("RGBA", (width * 10, height * len(actions)))
+    pen = ImageDraw.Draw(image)
+    for clip in actions.values():
+        for col in range(clip["frames"]):
+            x, y = col * width, clip["row"] * height
+            pen.ellipse((x + 80, y + 90 - col, x + 304, y + 320 - col),
+                        fill=(128, 128, 128, 255))
+    image_file = BytesIO()
+    image.save(image_file, "WEBP", lossless=True)
+    metadata = {"id": "qa-hd", "displayName": "高清测试角色", "spritesheetPath": "spritesheet.webp",
+                "schemaVersion": 2, "frameSize": HD_CELL, "actions": actions}
+    with ZipFile(destination, "w") as archive:
+        archive.writestr("pet.json", json.dumps(metadata))
+        archive.writestr("spritesheet.webp", image_file.getvalue())
+
+
+def verify_character_interactions(studio, scratch):
+    source = scratch / "test-hd.zip"
+    make_hd_role(source)
+    pack = read_package(source)
+    assert pack.cell_size == HD_CELL and len(pack.action_frames("waving")) == 10
+    pet = studio.pet
+    installed = pack.install(pet.library)
+    assert read_package(installed).animations == pack.animations
+    studio.select_character(installed)
+    assert pet._anims == pack.animations and pet._frames[0][0].width() == pet.width() * 2
+    preview = desk_workspace.CharacterActions(pack, studio.panel)
+    preview.choice.select("waving", notify=True)
+    for _ in range(10):
+        preview.sprite.advance()
+    assert preview.sprite.position == 9 and preview.play_button.text() == "重播"
+    preview.play_button.click()
+    assert preview.sprite.position == 0
+    preview.reject()
+
+    def mouse_move(local, buttons):
+        global_point = pet.mapToGlobal(local)
+        event = QMouseEvent(QEvent.Type.MouseMove, QPointF(local), QPointF(global_point),
+                            Qt.MouseButton.NoButton, buttons, Qt.KeyboardModifier.NoModifier)
+        QApplication.sendEvent(pet, event)
+
+    pet.apply_movement(False)
+    pet._ps.enter("idle")
+    pos = pet.rect().center()
+    QTest.mousePress(pet, Qt.MouseButton.LeftButton, pos=pos)
+    mouse_move(pos + QPoint(1, 0), Qt.MouseButton.LeftButton)
+    assert not pet._ps.is_dragging
+    QTest.mouseRelease(pet, Qt.MouseButton.LeftButton, pos=pos)
+    assert pet._click_timer.isActive()
+    QTest.qWait(QApplication.doubleClickInterval() + 70)
+    assert pet._ps.anim == "waving"
+
+    QTest.mouseClick(pet, Qt.MouseButton.LeftButton, pos=pos)
+    assert pet._click_timer.isActive()
+    QTest.mouseDClick(pet, Qt.MouseButton.LeftButton, pos=pos)
+    app.processEvents()
+    assert not pet._click_timer.isActive() and studio.panel.isVisible()
+
+    QTest.mousePress(pet, Qt.MouseButton.LeftButton, pos=pos)
+    mouse_move(pos - QPoint(QApplication.startDragDistance() + 6, 0), Qt.MouseButton.LeftButton)
+    assert pet._ps.is_dragging and pet._ps.anim == "lifted"
+    QTest.mouseRelease(pet, Qt.MouseButton.LeftButton, pos=pos)
+    assert not pet._ps.is_dragging and pet._ps.anim == "landing"
+    pet._ps.enter("sleeping")
+    pet.react("action")
+    assert pet._ps.anim == "waking"
+    pet._ps.enter("idle")
+    y = pet.height() // 3
+    for x in (pet.width() // 3, pet.width() * 2 // 3, pet.width() // 3):
+        mouse_move(QPoint(x, y), Qt.MouseButton.NoButton)
+    assert pet._ps.anim == "petting"
+
+    note = studio.new_note()
+    editor = studio.windows[note.id].editor
+    editor.setPlainText("第一项\n第二项")
+    editor.moveCursor(QTextCursor.MoveOperation.Start)
+    editor.checklist_at_cursor()
+    editor.moveCursor(QTextCursor.MoveOperation.End)
+    editor.checklist_at_cursor()
+    editor.checklist_at_cursor()
+    assert pet._ps.anim != "celebrate"
+    editor.moveCursor(QTextCursor.MoveOperation.Start)
+    editor.checklist_at_cursor()
+    assert pet._ps.anim == "celebrate"
+    assert studio.flush()
+
+    backup = scratch / "test-hd-backup.zip"
+    studio.save_backup_file(backup)
+    with TemporaryDirectory(dir=scratch) as temp:
+        recovered = stage_backup(backup, Path(temp))
+        assert recovered.active == installed.name
+        assert read_package(recovered.root / "incoming" / "library" / installed.name).animations == pack.animations
+
+
+verify_playback()
 app = create_ui_application("DeskPet notes smoke")
 app.setEffectEnabled(Qt.UIEffect.UI_General, True)
 QFontDatabase.addApplicationFont("C:/Windows/Fonts/msyh.ttc")
@@ -767,8 +918,10 @@ with TemporaryDirectory(dir=root) as scratch:
         previous = stage_backup(safety_zip, Path(safety_temp))
         assert previous.records[archived.id].title == "替换前的记录"
         assert previous.preferences["pet_scale"] == .25
+    verify_character_interactions(studio, scratch)
     studio.shutdown()
 print("PASS: multi-character library, action preview, character deletion and fallback, same-ID copies, "
       "note library and edge visibility, snow compositing and pause, "
       "paper feed hold and cancel, persisted deletion and undo, save failure rollback, "
-      "draggable edge tabs and note reattachment, batch deletion, tag editing and filtering, and tagged backup and restore")
+      "draggable edge tabs and note reattachment, batch deletion, tag editing and filtering, "
+      "tagged backup and restore, single-pass playback, mouse gestures and HD character backup")

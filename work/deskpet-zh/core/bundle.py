@@ -2,12 +2,11 @@
 import json
 import os
 from pathlib import Path
-import shutil
-import tempfile
 import zipfile
 
 from PIL import Image
-from .constants import TILE_W, TILE_H, COLS, ROWS, ANIM_DEFS
+from pet_packages import read_package
+from .constants import TILE_W, TILE_H
 
 CHARACTER_LOAD_ERRORS = (OSError, ValueError, zipfile.BadZipFile, KeyError, TypeError, AttributeError,
                          Image.DecompressionBombError)
@@ -42,66 +41,14 @@ def _stem(zip_path: str) -> str:
     return name.removesuffix(".zip")
 
 
-def _count_frames(sheet: Image.Image, row: int) -> int:
-    """Count non-blank frames in a spritesheet row by checking alpha channel."""
-    count = 0
-    for col in range(COLS):
-        tile = sheet.crop((col * TILE_W, row * TILE_H,
-                           (col + 1) * TILE_W, (row + 1) * TILE_H))
-        if tile.getchannel("A").getextrema()[1] > 10:
-            count = col + 1
-        else:
-            break
-    return max(count, 1)
-
-
-def load_pet_pil(zip_path: str, scale: float) -> tuple[str, list[list[Image.Image]], dict]:
-    """Extract and slice a pet bundle into PIL RGBA tiles.
-
-    Returns (display_name, frames[row][col], anims) where anims maps
-    animation name → (row, frame_count, fps).
-
-    Handles both flat zips (pet.json at root) and subdirectory zips
-    (e.g. ibera/pet.json), and ignores __MACOSX metadata entries.
-    """
-    tmp = tempfile.mkdtemp(prefix="deskpet-")
-    try:
-        with zipfile.ZipFile(zip_path) as z:
-            z.extractall(tmp)
-
-        # Locate pet.json — may be inside a subdirectory
-        pet_json_path = None
-        for root, dirs, files in os.walk(tmp):
-            dirs[:] = [d for d in dirs if d != "__MACOSX"]
-            if "pet.json" in files:
-                pet_json_path = os.path.join(root, "pet.json")
-                break
-        if pet_json_path is None:
-            raise FileNotFoundError(f"pet.json not found in {zip_path}")
-        pet_dir = os.path.dirname(pet_json_path)
-
-        with open(pet_json_path, encoding="utf-8-sig") as f:
-            meta = json.load(f)
-        name  = meta.get("displayName") or _stem(zip_path)
-        sheet = Image.open(
-            os.path.join(pet_dir, meta.get("spritesheetPath", "spritesheet.webp"))
-        ).convert("RGBA")
-        tw, th     = int(TILE_W * scale), int(TILE_H * scale)
-        row_frames = [_count_frames(sheet, r) for r in range(ROWS)]
-        anims = {
-            aname: (row, row_frames[row], fps)
-            for aname, (row, fps) in ANIM_DEFS.items()
-        }
-        frames: list[list[Image.Image]] = []
-        for row in range(ROWS):
-            row_imgs = []
-            for col in range(row_frames[row]):
-                tile = sheet.crop((col * TILE_W, row * TILE_H,
-                                   (col + 1) * TILE_W, (row + 1) * TILE_H))
-                if scale != 1.0:
-                    tile = tile.resize((tw, th), Image.LANCZOS)
-                row_imgs.append(tile)
-            frames.append(row_imgs)
-        return name, frames, anims
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+def load_pet_pil(zip_path: Path, scale: float) -> tuple[str, list[list[Image.Image]], dict]:
+    """Load the same validated clips used in the import and preview dialogs."""
+    pack = read_package(zip_path)
+    # Keep source pixels up to 2× the logical size for high-DPI monitors.
+    width, height = pack.cell_size
+    size = (min(width, round(TILE_W * scale * 2)), min(height, round(TILE_H * scale * 2)))
+    frames: list[list[Image.Image]] = [[] for _ in pack.animations]
+    for action, (row, _count, _fps) in pack.animations.items():
+        frames[row] = [tile.resize(size, Image.LANCZOS) if tile.size != size else tile
+                       for tile in pack.action_frames(action)]
+    return pack.name, frames, pack.animations

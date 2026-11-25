@@ -2,7 +2,7 @@
 from math import pi, sin
 from pathlib import Path
 
-from PySide6.QtCore import QEasingCurve, QEvent, QPoint, QPointF, QRect, QRectF, Qt, QVariantAnimation
+from PySide6.QtCore import QEasingCurve, QEvent, QPoint, QPointF, QRect, QRectF, Qt, Signal, QVariantAnimation
 from PySide6.QtGui import (
     QColor, QFont, QFontMetrics, QMouseEvent, QPainter, QPalette, QPen, QShortcut, QKeySequence,
     QTextBlockFormat, QTextCursor, QTextListFormat,
@@ -52,6 +52,7 @@ def fit_to_desktop(rect, screen):
 
 
 class RichEditor(QTextEdit):
+    checklist_completed = Signal()
     unchecked = QTextBlockFormat.MarkerType.Unchecked
     checked = QTextBlockFormat.MarkerType.Checked
 
@@ -177,6 +178,16 @@ class RichEditor(QTextEdit):
             self.spring.setEndValue(float(not was_checked))
             self.spring.start()
         self.viewport().update()
+        if not was_checked and not self.has_unchecked_item():
+            self.checklist_completed.emit()
+
+    def has_unchecked_item(self):
+        block = self.document().begin()
+        while block.isValid():
+            if block.blockFormat().marker() == self.unchecked:
+                return True
+            block = block.next()
+        return False
 
     def check_box(self, block, caret):
         text_list = block.textList()
@@ -371,6 +382,7 @@ class StickyWindow(QWidget):
         else:
             self.editor.setPlainText(note.textContent)
         self.editor.textChanged.connect(self.update_content)
+        self.editor.checklist_completed.connect(lambda: self.studio.pet.react("celebrate"))
         body.addWidget(self.editor, 1)
 
         self.format_bar = QFrame(objectName="noteToolbar")
@@ -468,8 +480,7 @@ class StickyWindow(QWidget):
         self.note.collapsed = True
         self.note.clear_dock()
         self.close()
-        if self.studio.pet.isVisible() and not self.studio.pet._ps.is_dragging:
-            self.studio.pet._ps.enter("action")
+        self.studio.pet.react("fold")
 
     def save_geometry(self):
         if self.assigning_geometry or not self.isVisible():
