@@ -99,6 +99,10 @@ class Note:
     def paper_tone(self):
         return NOTE_TONES[self.color][1]
 
+    @property
+    def on_desktop(self):
+        return not (self.archived or self.collapsed) and (self.visible or bool(self.edge))
+
     def clear_dock(self):
         self.edge = self.edgeScreen = ""
 
@@ -125,7 +129,7 @@ class Note:
                 setattr(note, key, value[key])
         if note.collapsed or note.archived:
             note.visible = False
-        if note.collapsed or note.archived or not note.edge:
+        if note.archived or not note.edge:
             note.clear_dock()
         clips = value.get("textClips")
         if isinstance(clips, list):

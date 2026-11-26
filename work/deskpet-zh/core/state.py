@@ -32,7 +32,6 @@ _RESPONSES = {
     "waking": ("waking", "waiting"),
     "stretch": ("stretching", "waiting"),
     "celebrate": ("celebrate", "review"),
-    "fold": ("review",),
 }
 
 

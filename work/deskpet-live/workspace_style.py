@@ -106,4 +106,15 @@ QPushButton#choice {
 }
 QPushButton#choice:hover, QPushButton#choice:pressed { background: #494949; }
 QScrollBar::handle:vertical { background: #494949; border-radius: 3px; }
+QScrollArea#libraryScroll QScrollBar:vertical {
+  background: transparent; border: none; width: 11px; margin: 4px 0;
+}
+QScrollArea#libraryScroll QScrollBar::handle:vertical {
+  background: rgba(150,150,150,125); border-radius: 3px;
+  margin: 0 2px 0 3px; min-height: 36px;
+}
+QScrollArea#libraryScroll QScrollBar::handle:vertical:hover { background: rgba(175,175,175,195); }
+QScrollArea#libraryScroll QScrollBar::handle:vertical:pressed { background: #b0b0b0; }
+QScrollArea#libraryScroll QScrollBar::add-page:vertical,
+QScrollArea#libraryScroll QScrollBar::sub-page:vertical { background: transparent; }
 """

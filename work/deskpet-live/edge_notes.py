@@ -13,6 +13,7 @@ from edge_drag import EdgeDragPreview
 TAB_WIDTH = 46
 TAB_HEIGHT = 178
 TAB_STEP = 130
+MIN_TAB_STEP = 44
 SNAP_DISTANCE = 30
 LAYOUT_PREFERENCE = "note_edge_layout"
 TAB_RADIUS = 12
@@ -41,6 +42,7 @@ class NoteTab(QAbstractButton):
     def __init__(self, note, edge, activate, parent):
         super().__init__(parent)
         self.edge = edge
+        self.exposed_height = TAB_STEP
         self.setFixedSize(TAB_WIDTH, TAB_HEIGHT)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.clicked.connect(activate)
@@ -72,15 +74,17 @@ class NoteTab(QAbstractButton):
         fill.setColorAt(0 if right else 1, tone.lighter(104))
         fill.setColorAt(1 if right else 0, tone.darker(110))
         painter.fillPath(path, fill)
-        painter.translate(width / 2 - inward * 6, TAB_STEP / 2)
+        span = self.exposed_height
+        painter.translate(width / 2 - inward * 6, span / 2)
         painter.rotate(90 if right else -90)
         font = self.font()
         font.setPixelSize(12)
         font.setBold(self.opened or self.underMouse())
         painter.setFont(font)
         painter.setPen(QColor("#332c3b"))
-        title = QFontMetrics(font).elidedText(self.title, Qt.TextElideMode.ElideRight, TAB_STEP - 26)
-        painter.drawText(QRectF(-TAB_STEP / 2, -11, TAB_STEP, 22), Qt.AlignmentFlag.AlignCenter, title)
+        elide = Qt.TextElideMode.ElideMiddle if span < 80 else Qt.TextElideMode.ElideRight
+        title = QFontMetrics(font).elidedText(self.title, elide, span - 18)
+        painter.drawText(QRectF(-span / 2, -11, span, 22), Qt.AlignmentFlag.AlignCenter, title)
 
 
 class EdgeRail(QWidget):
@@ -95,6 +99,7 @@ class EdgeRail(QWidget):
         self.pressed_button = None
         self.dragging = False
         self.previewing = False
+        self.resizing = False
         body = QVBoxLayout(self)
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(7)
@@ -109,7 +114,7 @@ class EdgeRail(QWidget):
         self.track.setAutoFillBackground(False)
         body.addWidget(self.scroll)
         self.add_note = button("＋", lambda: controller.studio.new_note(edge=self.edge, screen=self.screen_ref),
-                               tip="新建贴边便签 · 拖动可移动标签栏")
+                               tip="点击新建便签 · 多张贴边时上下拖动调整重叠")
         self.add_note.setAccessibleName("新建贴边便签")
         self.add_note.setFixedSize(29, 29)
         self.add_note.installEventFilter(self)
@@ -129,15 +134,23 @@ class EdgeRail(QWidget):
             self.pressed_button = watched
             self.press_point = event.globalPosition().toPoint()
             self.drag_offset = self.press_point - self.pos()
+            self.resizing = watched is self.add_note and len(self.tabs) > 1
+            if self.resizing:
+                self.press_height = self.scroll.height()
+                self.press_top = self.y()
         elif watched is self.pressed_button:
             if kind == QEvent.Type.MouseMove and event.buttons() & Qt.MouseButton.LeftButton:
                 return self.drag_to(event.globalPosition().toPoint())
             if kind == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
                 point = event.globalPosition().toPoint()
                 moved = self.drag_to(point)
+                resized = self.resizing
                 self.end_drag()
                 if moved:
-                    self.controller.rail_dropped(self, point)
+                    if resized:
+                        self.controller.save_stack_size(self)
+                    else:
+                        self.controller.rail_dropped(self, point)
                     return True
             elif kind in (QEvent.Type.UngrabMouse, QEvent.Type.Hide):
                 moved = self.dragging
@@ -152,12 +165,17 @@ class EdgeRail(QWidget):
                 return False
             self.dragging = True
             self.original_cursor = self.pressed_button.cursor()
-            self.pressed_button.setCursor(Qt.CursorShape.ClosedHandCursor)
+            self.pressed_button.setCursor(Qt.CursorShape.SizeVerCursor if self.resizing
+                                          else Qt.CursorShape.ClosedHandCursor)
             self.pressed_button.setDown(False)
-            self.previewing = self.controller.drag_preview.begin(self.controller.studio, self, self.pressed_button, point)
-            if self.previewing:
-                self.setWindowOpacity(.04)
-        if self.previewing:
+            if not self.resizing:
+                self.previewing = self.controller.drag_preview.begin(
+                    self.controller.studio, self, self.pressed_button, point)
+                if self.previewing:
+                    self.setWindowOpacity(.04)
+        if self.resizing:
+            self.size_stack(self.press_height + point.y() - self.press_point.y(), top=self.press_top)
+        elif self.previewing:
             self.controller.drag_preview.follow(point)
         else:
             self.move(point - self.drag_offset)
@@ -172,6 +190,7 @@ class EdgeRail(QWidget):
             self.previewing = False
         self.pressed_button = None
         self.dragging = False
+        self.resizing = False
 
     def update_notes(self, notes):
         if self.dragging:
@@ -182,28 +201,55 @@ class EdgeRail(QWidget):
                 tab.hide()
                 tab.deleteLater()
             self.tabs.clear()
-            for index, note in enumerate(notes):
+            for note in notes:
                 tab = NoteTab(note, self.edge,
                               lambda _=False, note_id=note.id: self.controller.open_tab(note_id), self.track)
                 tab.installEventFilter(self)
                 self.tabs[note.id] = tab
-                tab.move(0, index * TAB_STEP)
                 tab.show()
         else:
             for note in notes:
                 self.tabs[note.id].update_note(note)
-        area = self.screen_ref.availableGeometry()
-        track_height = (len(notes) - 1) * TAB_STEP + TAB_HEIGHT if notes else 0
-        # The scroll area starts empty, so its track must be sized as tabs arrive.
-        self.track.setFixedSize(TAB_WIDTH, track_height)
         self.scroll.setVisible(bool(notes))
-        if notes:
-            self.scroll.setFixedHeight(min(track_height, max(80, area.height() - 94)))
-        self.adjustSize()
-        self.layout().activate()
-        self.snap_to_edge()
+        self.size_stack(self.controller.stack_height(self.screen_ref, self.edge))
         if not self.isVisible():
             self.show()
+
+    def stack_bounds(self):
+        if not self.tabs:
+            return 0, 0
+        gaps = len(self.tabs) - 1
+        limit = max(80, self.screen_ref.availableGeometry().height() - 94)
+        normal = min(TAB_HEIGHT + gaps * TAB_STEP, limit)
+        minimum = min(TAB_HEIGHT + gaps * MIN_TAB_STEP, (normal + TAB_HEIGHT) // 2, normal)
+        return minimum, normal
+
+    def size_stack(self, preferred, *, top=None):
+        minimum, normal = self.stack_bounds()
+        tab_count = len(self.tabs)
+        height = normal if preferred is None else min(normal, max(minimum, preferred))
+        gap = self.layout().spacing() if tab_count else 0
+        if top is not None:
+            bottom = self.screen_ref.availableGeometry().bottom() + 1
+            height = min(height, max(minimum, bottom - top - self.add_note.height() - gap))
+        ratio = (height - minimum) / (normal - minimum) if normal > minimum else 1
+        step = MIN_TAB_STEP + (TAB_STEP - MIN_TAB_STEP) * ratio
+        offset = 0
+        for index, tab in enumerate(self.tabs.values()):
+            offset = round(index * step)
+            exposed = round((index + 1) * step) - offset if index < tab_count - 1 else TAB_STEP
+            tab.move(0, offset)
+            if tab.exposed_height != exposed:
+                tab.exposed_height = exposed
+                tab.update()
+        self.track.setFixedSize(TAB_WIDTH, offset + TAB_HEIGHT if tab_count else 0)
+        self.scroll.setFixedHeight(height)
+        self.setFixedHeight(height + gap + self.add_note.height())
+        self.layout().activate()
+        if top is None:
+            self.snap_to_edge()
+        else:
+            self.move(self.x(), top)
 
     def snap_to_edge(self):
         area = self.screen_ref.availableGeometry()
@@ -230,9 +276,14 @@ class EdgeNotes:
     def load_layout(self):
         layout = self.studio.pet.preference(LAYOUT_PREFERENCE)
         self.layout = layout if isinstance(layout, dict) else {}
-        anchors = self.layout.get("anchors")
-        self.anchors = {name: sides.copy() for name, sides in anchors.items() if isinstance(sides, dict)} \
-            if isinstance(anchors, dict) else {}
+        self.anchors = self.screen_layout("anchors")
+        self.stack_heights = self.screen_layout("stack_heights")
+
+    def screen_layout(self, key):
+        value = self.layout.get(key)
+        if not isinstance(value, dict):
+            return {}
+        return {screen: sides.copy() for screen, sides in value.items() if isinstance(sides, dict)}
 
     def watch_screen(self, screen):
         screen.availableGeometryChanged.connect(lambda _: self.refresh())
@@ -252,6 +303,10 @@ class EdgeNotes:
         value = self.anchors.get(screen.name(), {}).get(edge)
         return value if isinstance(value, (float, int)) and 0 <= value <= 1 else .5
 
+    def stack_height(self, screen, edge):
+        value = self.stack_heights.get(screen.name(), {}).get(edge)
+        return value if type(value) is int and value > 0 else None
+
     def note_rail(self, note):
         return self.screen_for(note), note.edge
 
@@ -263,7 +318,7 @@ class EdgeNotes:
             return
         groups = {self.home_rail(): []}
         for note in self.studio.store.records.values():
-            if note.edge and not note.archived:
+            if note.edge and note.on_desktop:
                 groups.setdefault(self.note_rail(note), []).append(note)
         for key in self.rails.keys() - groups.keys():
             rail = self.rails.pop(key)
@@ -278,7 +333,7 @@ class EdgeNotes:
 
     def open_tab(self, note_id):
         note = self.studio.store.records.get(note_id)
-        if note is None or not note.edge or note.archived:
+        if note is None or not note.edge or not note.on_desktop:
             return
         window = self.studio.windows.get(note_id)
         if window is not None and window.isVisible():
@@ -293,6 +348,28 @@ class EdgeNotes:
             if tab is not None:
                 tab.update_note(note)
 
+    def set_anchor(self, screen, edge, center):
+        area = screen.availableGeometry()
+        fraction = (center - area.top()) / max(1, area.height() - 1)
+        self.anchors.setdefault(screen.name(), {})[edge] = min(1., max(0., fraction))
+
+    def save_layout(self):
+        self.layout.update(anchors=self.anchors, stack_heights=self.stack_heights)
+        self.studio.pet.set_preference(LAYOUT_PREFERENCE, self.layout)
+
+    def save_stack_size(self, rail):
+        screen, edge = rail.screen_ref, rail.edge
+        heights = self.stack_heights.setdefault(screen.name(), {})
+        height = rail.scroll.height()
+        if height < rail.stack_bounds()[1]:
+            heights[edge] = height
+        else:
+            heights.pop(edge, None)
+        self.set_anchor(screen, edge, rail.y() + rail.height() // 2)
+        self.save_layout()
+        self.refresh()
+        self.position_rail_notes(screen, edge)
+
     def rail_dropped(self, rail, point):
         previous = rail.screen_ref, rail.edge
         screen = self.studio.app.screenAt(point) or rail.screen_ref
@@ -300,12 +377,13 @@ class EdgeNotes:
         edge = "left" if point.x() < area.center().x() else "right"
         target = screen, edge
         center = point.y() - rail.drag_offset.y() + rail.height() // 2
-        fraction = (center - area.top()) / max(1, area.height() - 1)
-        self.anchors.setdefault(screen.name(), {})[edge] = min(1., max(0., fraction))
+        self.set_anchor(screen, edge, center)
         if previous == self.home_rail():
             self.layout.update(screen=screen.name(), edge=edge)
-        self.layout["anchors"] = self.anchors
-        self.studio.pet.set_preference(LAYOUT_PREFERENCE, self.layout)
+        preferred = self.stack_height(*previous)
+        if target != previous and preferred is not None:
+            self.stack_heights.setdefault(screen.name(), {}).setdefault(edge, preferred)
+        self.save_layout()
 
         changed = False
         if target != previous:
@@ -317,12 +395,15 @@ class EdgeNotes:
                     if window is not None:
                         window.update_style()
         self.refresh()
-        for note in self.studio.store.records.values():
-            window = self.studio.windows.get(note.id)
-            if note.visible and note.edge and window is not None and self.note_rail(note) == target:
-                self.position(window)
+        self.position_rail_notes(*target)
         if changed:
             self.studio.changed()
+
+    def position_rail_notes(self, screen, edge):
+        for note in self.studio.store.records.values():
+            window = self.studio.windows.get(note.id)
+            if note.visible and note.edge and window is not None and self.note_rail(note) == (screen, edge):
+                self.position(window)
 
     def dropped(self, window, point):
         screen = self.studio.app.screenAt(point) or window.screen()
@@ -359,8 +440,10 @@ class EdgeNotes:
         rail = self.rails.get((screen, note.edge))
         tab = rail.tabs.get(note.id) if rail else None
         if tab is not None and reveal_tab:
-            rail.scroll.ensureWidgetVisible(tab, 0, 4)
-        y = tab.mapToGlobal(QPoint(TAB_WIDTH // 2, TAB_STEP // 2)).y() - 38 if tab and tab.visibleRegion() else note.y
+            center = tab.y() + tab.exposed_height // 2
+            rail.scroll.ensureVisible(TAB_WIDTH // 2, center, 0, tab.exposed_height // 2 + 4)
+        y = (tab.mapToGlobal(QPoint(TAB_WIDTH // 2, tab.exposed_height // 2)).y() - 38
+             if tab and tab.visibleRegion() else note.y)
         x = area.left() + TAB_WIDTH if note.edge == "left" else area.right() + 1 - TAB_WIDTH - width
         window.setGeometry(QRect(x, min(max(y, area.top()), area.bottom() + 1 - height), width, height))
 

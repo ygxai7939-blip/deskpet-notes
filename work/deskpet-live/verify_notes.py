@@ -226,7 +226,7 @@ with TemporaryDirectory(dir=root) as scratch:
     assert studio.flush() and first_window.saved.accessibleName() == "已保存"
     assert not first_window.saved.text() and not first_window.saved.pixmap().isNull()
     actions = first_window.options_menu()
-    next(action for action in actions.actions() if action.text() == "关闭便签").trigger()
+    next(action for action in actions.actions() if action.text() == "收起便签").trigger()
     actions.deleteLater()
     assert not first_window.isVisible()
     QTest.qWait(100)
@@ -251,6 +251,10 @@ with TemporaryDirectory(dir=root) as scratch:
     caret = check_editor.cursorRect(QTextCursor(block))
     check_point = check_editor.check_box(block, caret).center().toPoint()
     assert block.blockFormat().marker() == QTextBlockFormat.MarkerType.Unchecked
+    pixels = check_editor.viewport().grab().toImage()
+    for y in range(check_point.y() - 3, check_point.y() + 4):
+        for x in range(check_point.x() - 3, check_point.x() + 4):
+            assert pixels.pixelColor(x, y).red() > 160, "Native checkbox is visible inside the custom outline"
     QTest.mouseClick(check_editor.viewport(), Qt.MouseButton.LeftButton, pos=check_point)
     assert block.blockFormat().marker() == QTextBlockFormat.MarkerType.Checked
     assert check_editor.spring.state() == QVariantAnimation.State.Running
@@ -320,7 +324,9 @@ with TemporaryDirectory(dir=root) as scratch:
     editor.toggle_pin(True)
     assert item.topmost and editor.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
     expanded_size = (editor.width(), editor.height())
-    editor.fold_into_pet()
+    actions = editor.options_menu()
+    next(action for action in actions.actions() if action.text() == "收起便签").trigger()
+    actions.deleteLater()
     assert item.collapsed and not item.visible and not editor.isVisible()
     assert studio.flush()
     assert NoteStore(path).records[item.id].collapsed and not NoteStore(path).records[item.id].visible
@@ -919,9 +925,90 @@ with TemporaryDirectory(dir=root) as scratch:
         assert previous.records[archived.id].title == "替换前的记录"
         assert previous.preferences["pet_scale"] == .25
     verify_character_interactions(studio, scratch)
+
+    screen, side = studio.edge_notes.home_rail()
+    folded_tabs = [Note(title=f"压缩测试 {index}", visible=False, edge=side, edgeScreen=screen.name())
+                   for index in range(4)]
+    for entry in folded_tabs:
+        studio.store.records[entry.id] = entry
+    studio.edge_notes.refresh()
+    rail = studio.edge_notes.rails[(screen, side)]
+    rail.scroll.verticalScrollBar().setValue(0)
+    before_count = len(studio.store.records)
+    original_top = rail.y()
+    original_height = rail.scroll.height()
+    plus = rail.add_note
+    start = plus.mapToGlobal(plus.rect().center())
+    steps = (0, -max(24, QApplication.startDragDistance()), -76)
+    for y_offset in steps:
+        point = start + QPoint(0, y_offset)
+        press = y_offset == 0
+        kind = QEvent.Type.MouseButtonPress if press else QEvent.Type.MouseMove
+        changed_button = Qt.MouseButton.LeftButton if press else Qt.MouseButton.NoButton
+        app.sendEvent(plus, QMouseEvent(kind, QPointF(plus.mapFromGlobal(point)), QPointF(point),
+                                       changed_button, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier))
+        if not press:
+            assert rail.y() == original_top and rail.scroll.height() == original_height + y_offset
+            assert plus.mapToGlobal(plus.rect().center()) == point
+            assert not studio.edge_notes.drag_preview.isVisible()
+    app.sendEvent(plus, QMouseEvent(QEvent.Type.MouseButtonRelease, QPointF(plus.mapFromGlobal(point)),
+                                   QPointF(point), Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton,
+                                   Qt.KeyboardModifier.NoModifier))
+    assert rail.y() == original_top and rail.scroll.height() == original_height - 76
+    assert len(studio.store.records) == before_count
+    saved_layout = settings.load(settings_file)["note_edge_layout"]
+    assert saved_layout["stack_heights"][screen.name()][side] == original_height - 76
+    studio.edge_notes.load_layout()
+    studio.edge_notes.refresh()
+    assert plus.mapToGlobal(plus.rect().center()) == point
+    ordered = list(rail.tabs.values())
+    assert 0 < ordered[1].y() - ordered[0].y() < TAB_STEP
+    assert rail.track.childAt(ordered[0].width() // 2, ordered[0].exposed_height // 2) is ordered[0]
+    first_id = next(iter(rail.tabs))
+    was_open = studio.store.records[first_id].visible
+    QTest.mouseClick(ordered[0], Qt.MouseButton.LeftButton,
+                     pos=QPoint(ordered[0].width() // 2, ordered[0].exposed_height // 2))
+    assert studio.store.records[first_id].visible != was_open
+    drag_to(plus, point + QPoint(0, 32))
+    assert rail.scroll.height() == original_height - 44 and rail.y() == original_top
+    QTest.mouseClick(plus, Qt.MouseButton.LeftButton)
+    assert len(studio.store.records) == before_count + 1
+
+    single, neighbour = folded_tabs[:2]
+    one_window = studio.show_note(single)
+    two_window = studio.show_note(neighbour)
+    single_menu = one_window.options_menu()
+    next(action for action in single_menu.actions() if action.text() == "收起便签").trigger()
+    single_menu.deleteLater()
+    assert single.collapsed and not one_window.isVisible() and two_window.isVisible()
+    assert single.edge == side and single.id not in rail.tabs
+    assert studio.show_note(single).isVisible() and single.id in rail.tabs
+
+    floating_note = studio.new_note()
+    floating_window = studio.windows[floating_note.id]
+    floating_window.detach()
+    pending = Note(title="未显示", visible=False)
+    studio.store.records[pending.id] = pending
+    tray_menu = desk_workspace.RoundedMenu()
+    studio.populate_menu(tray_menu, header=False)
+    close_all = next(action for action in tray_menu.actions() if action.text() == "收起便签")
+    with patch.object(studio.store, "save", side_effect=PermissionError("test")), \
+         patch.object(desk_workspace, "show_warning") as warning:
+        close_all.trigger()
+        warning.assert_called_once()
+        assert one_window.isVisible() and two_window.isVisible() and floating_window.isVisible()
+    close_all.trigger()
+    tray_menu.deleteLater()
+    assert not any(window.isVisible() for window in studio.windows.values())
+    assert not any(group.tabs for group in studio.edge_notes.rails.values())
+    readback = NoteStore(path).records
+    assert readback[single.id].collapsed and readback[single.id].edge == side
+    assert readback[floating_note.id].collapsed and not readback[floating_note.id].edge
+    assert readback[archived.id].archived and not readback[pending.id].collapsed
     studio.shutdown()
 print("PASS: multi-character library, action preview, character deletion and fallback, same-ID copies, "
       "note library and edge visibility, snow compositing and pause, "
       "paper feed hold and cancel, persisted deletion and undo, save failure rollback, "
       "draggable edge tabs and note reattachment, batch deletion, tag editing and filtering, "
-      "tagged backup and restore, single-pass playback, mouse gestures and HD character backup")
+      "tagged backup and restore, single-pass playback, mouse gestures and HD character backup, "
+      "single and bulk collapse, persistent edge stack compression and click-to-create")

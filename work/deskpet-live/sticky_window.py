@@ -4,12 +4,12 @@ from pathlib import Path
 
 from PySide6.QtCore import QEasingCurve, QEvent, QPoint, QPointF, QRect, QRectF, Qt, Signal, QVariantAnimation
 from PySide6.QtGui import (
-    QColor, QFont, QFontMetrics, QMouseEvent, QPainter, QPalette, QPen, QShortcut, QKeySequence,
+    QColor, QFont, QFontMetrics, QMouseEvent, QPainter, QPen, QShortcut, QKeySequence,
     QTextBlockFormat, QTextCursor, QTextListFormat,
 )
 from PySide6.QtWidgets import (
     QApplication, QAbstractButton, QFrame, QHBoxLayout, QLineEdit, QPlainTextEdit,
-    QSizeGrip, QTextEdit, QVBoxLayout, QWidget,
+    QSizeGrip, QStyle, QStyleOption, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from desk_style import (
@@ -56,8 +56,9 @@ class RichEditor(QTextEdit):
     unchecked = QTextBlockFormat.MarkerType.Unchecked
     checked = QTextBlockFormat.MarkerType.Checked
 
-    def __init__(self):
+    def __init__(self, paper):
         super().__init__()
+        self.paper = paper
         self.pressed_checkbox = None
         self.spring_block = None
         self.spring = QVariantAnimation(self, duration=250)
@@ -226,15 +227,29 @@ class RichEditor(QTextEdit):
 
     def paint_check(self, painter, block, caret, box, progress):
         fill = min(1., max(0., progress))
+        cover = box.adjusted(-4, -2, 4, 2)
+        if block.textDirection() == Qt.LayoutDirection.RightToLeft:
+            cover.setLeft(max(cover.left(), caret.right() + 1))
+        else:
+            cover.setRight(min(cover.right(), caret.left() - 1))
+        # The Qt marker has already been drawn on the transparent editor.
+        # Restore the paper underneath it before painting our animated marker.
+        paper_style = QStyleOption()
+        paper_style.initFrom(self.paper)
+        painter.save()
+        painter.setClipRect(cover, Qt.ClipOperation.IntersectClip)
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
+        painter.translate(-self.viewport().mapTo(self.paper, QPoint()))
+        self.paper.style().drawPrimitive(QStyle.PrimitiveElement.PE_Widget, paper_style, painter, self.paper)
+        painter.restore()
         background = block.blockFormat().background()
-        if background.style() == Qt.BrushStyle.NoBrush:
-            background = self.viewport().palette().brush(QPalette.ColorRole.Base)
-        painter.fillRect(box.adjusted(-1, -1, 1, 1), background)
+        if background.style() != Qt.BrushStyle.NoBrush:
+            painter.fillRect(cover, background)
         bounce = .08 * sin(pi * fill) + min(.08, abs(progress - fill))
         stretch = box.width() * bounce / 2
         box.adjust(-stretch, -stretch, stretch, stretch)
         painter.setPen(QPen(QColor("#6a6a6a"), 1.15))
-        painter.setBrush(background)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRoundedRect(box, box.width() * .27, box.width() * .27)
         if fill <= 0:
             return
@@ -371,7 +386,7 @@ class StickyWindow(QWidget):
         self.find_shortcut = QShortcut(QKeySequence.StandardKey.Find, self)
         self.find_shortcut.activated.connect(self.toggle_search)
 
-        self.editor = RichEditor()
+        self.editor = RichEditor(self.paper)
         self.editor.setObjectName("noteBody")
         self.editor.viewport().setAutoFillBackground(False)
         self.editor.setPlaceholderText("写点什么…")
@@ -475,13 +490,6 @@ class StickyWindow(QWidget):
             self.saved.setAccessibleName(text)
             self.saved.setToolTip(text)
 
-    def fold_into_pet(self):
-        self.save_geometry()
-        self.note.collapsed = True
-        self.note.clear_dock()
-        self.close()
-        self.studio.pet.react("fold")
-
     def save_geometry(self):
         if self.assigning_geometry or not self.isVisible():
             return
@@ -550,7 +558,7 @@ class StickyWindow(QWidget):
             dock.addAction(caption, lambda _=False, value=side: self.studio.edge_notes.attach(self, value, self.screen()))
         if self.note.edge:
             dock.addAction("取消贴边", self.detach)
-        menu.addAction("折叠回宠物", self.fold_into_pet)
+        menu.addAction("收起便签", lambda: self.studio.collapse_notes((self.note,)))
         choices = menu.submenu("便签底色")
         for name, (caption, _) in NOTE_TONES.items():
             act = choices.addAction(caption)
@@ -564,7 +572,6 @@ class StickyWindow(QWidget):
             act.setChecked(self.note.backgroundOpacity == number)
             act.triggered.connect(lambda _, n=number: self.set_opacity(n))
         menu.addSeparator()
-        menu.addAction("关闭便签", self.close)
         menu.addAction("删除便签", lambda: self.studio.ask_delete(self.note, self))
         return menu
 

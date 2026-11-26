@@ -50,9 +50,11 @@ def note_state(note):
         return "已归档"
     if note.visible:
         return "在桌面 · 置顶" if note.topmost else "在桌面"
+    if note.collapsed:
+        return "已收起"
     if note.edge:
         return "已贴边"
-    return "已收回" if note.collapsed else "已隐藏"
+    return "已隐藏"
 
 
 def show_note_tags(widget, tags):
@@ -769,7 +771,7 @@ class Workspace(QWidget):
         toolbar.addWidget(self.summary)
         root.addLayout(toolbar)
 
-        scroll = QScrollArea()
+        scroll = QScrollArea(objectName="libraryScroll")
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.viewport().setAutoFillBackground(False)
@@ -1357,6 +1359,33 @@ class DeskWorkspace:
         self.edge_notes.refresh()
         self.changed()
 
+    def collapse_notes(self, notes):
+        records = self.store.records.copy()
+        updates = []
+        for note in notes:
+            if records.get(note.id) is not note or not note.on_desktop:
+                continue
+            window = self.windows.get(note.id)
+            changes = {"visible": False, "collapsed": True}
+            if window is not None and window.isVisible():
+                x, y, width, height = window.geometry().getRect()
+                changes.update(x=x, y=y, width=width, height=height)
+            records[note.id] = replace(note, **changes)
+            updates.append((note, window, changes))
+        if not updates or not self.save_notes(records):
+            return
+        self.paper_feed.cancel()
+        for note, window, changes in updates:
+            for key, value in changes.items():
+                setattr(note, key, value)
+            if window is not None:
+                window.hide()
+        self.refresh_notes()
+        self.refresh_tray()
+
+    def collapse_desktop_notes(self):
+        self.collapse_notes(self.store.records.values())
+
     def close_note_window(self, note):
         window = self.windows.pop(note.id, None)
         if window:
@@ -1434,9 +1463,8 @@ class DeskWorkspace:
         menu = RoundedMenu(anchor)
         menu.addAction("恢复并打开" if note.archived else "打开便签", lambda: self.show_note(note))
         menu.addAction(icon("tag", "#dedede", 17), "编辑标签", lambda: self.edit_note_tags(note))
-        if note.visible:
-            menu.addAction("隐藏到列表", lambda: self.windows[note.id].close())
-            menu.addAction("折叠回宠物", lambda: self.windows[note.id].fold_into_pet())
+        if note.on_desktop:
+            menu.addAction("收起便签", lambda: self.collapse_notes((note,)))
         menu.addSeparator()
         menu.addAction("删除便签", lambda: self.ask_delete(note))
         menu.exec(anchor.mapToGlobal(QPoint(0, anchor.height() + 4)))
@@ -1773,6 +1801,7 @@ class DeskWorkspace:
             menu.addMenu(options)
         text = "收起桌宠" if self.pet.isVisible() else "显示桌宠" if self.pet.has_character else "导入角色"
         menu.addAction(text, self.toggle_pet)
+        menu.addAction("收起便签", self.collapse_desktop_notes)
         menu.addSeparator()
         menu.addAction("退出应用", self.quit)
 
