@@ -78,12 +78,35 @@ def verify_playback():
     pet_state.tick(.01)
     assert pet_state.anim == "run_left" and pet_state.fidx == 2
 
+    anims.update(lifted=(9, 6, 10), landing=(10, 5, 10))
+    pet_state.reset_animations(anims, lifted_playback=(3, 2))
+    pet_state.on_drag_start()
+    assert (pet_state.anim, pet_state.fidx) == ("lifted", 0)
+    pet_state.tick(.2)
+    pet_state.on_release()
+    assert (pet_state.anim, pet_state.fidx) == ("landing", 2)
+    pet_state.tick(.3)
+    assert (pet_state.anim, pet_state.fidx) == ("idle", 0)
+    pet_state.on_drag_start()
+    pet_state.tick(1.0)
+    assert (pet_state.anim, pet_state.fidx) == ("lifted", 4)
+    pet_state.tick(.2)
+    assert pet_state.fidx == 3
+    pet_state.on_release()
+    assert (pet_state.anim, pet_state.fidx) == ("landing", 0)
+
+    pet_state.reset_animations(anims)
+    pet_state.on_drag_start()
+    pet_state.tick(.6)
+    assert (pet_state.anim, pet_state.fidx) == ("lifted", 0)
+
 
 def make_hd_role(destination):
     actions = {action: {"row": row, "frames": 10 if action == "waving" else 3, "fps": fps}
                for action, (row, fps) in LEGACY_ACTIONS.items()}
     for action in ("petting", "lifted", "landing", "waking", "celebrate"):
         actions[action] = {"row": len(actions), "frames": 3, "fps": 10}
+    actions["lifted"].update(loopStart=1, earlyLandingFrame=2)
     width, height = HD_CELL
     image = Image.new("RGBA", (width * 10, height * len(actions)))
     pen = ImageDraw.Draw(image)
@@ -106,9 +129,27 @@ def verify_character_interactions(studio, scratch):
     make_hd_role(source)
     pack = read_package(source)
     assert pack.cell_size == HD_CELL and len(pack.action_frames("waving")) == 10
+    with ZipFile(source) as archive:
+        manifest = archive.read("pet.json")
+        atlas = archive.read("spritesheet.webp")
+    invalid = scratch / "invalid-lifted.zip"
+    for field, value in (("loopStart", True), ("loopStart", 3), ("earlyLandingFrame", 3)):
+        metadata = json.loads(manifest)
+        metadata["actions"]["lifted"][field] = value
+        with ZipFile(invalid, "w") as archive:
+            archive.writestr("pet.json", json.dumps(metadata))
+            archive.writestr("spritesheet.webp", atlas)
+        try:
+            read_package(invalid)
+        except ValueError as error:
+            assert field in str(error)
+        else:
+            raise AssertionError(f"Invalid lifted metadata was accepted: {field}={value}")
     pet = studio.pet
     installed = pack.install(pet.library)
-    assert read_package(installed).animations == pack.animations
+    installed_pack = read_package(installed)
+    assert installed_pack.animations == pack.animations
+    assert (installed_pack.lifted_loop_start, installed_pack.early_landing_frame) == (1, 2)
     studio.select_character(installed)
     assert pet._anims == pack.animations and pet._frames[0][0].width() == pet.width() * 2
     preview = desk_workspace.CharacterActions(pack, studio.panel)
@@ -118,6 +159,10 @@ def verify_character_interactions(studio, scratch):
     assert preview.sprite.position == 9 and preview.play_button.text() == "重播"
     preview.play_button.click()
     assert preview.sprite.position == 0
+    preview.choice.select("lifted", notify=True)
+    for _ in range(3):
+        preview.sprite.advance()
+    assert preview.sprite.position == 1
     preview.reject()
 
     def mouse_move(local, buttons):
@@ -144,10 +189,15 @@ def verify_character_interactions(studio, scratch):
     assert not pet._click_timer.isActive() and studio.panel.isVisible()
 
     QTest.mousePress(pet, Qt.MouseButton.LeftButton, pos=pos)
-    mouse_move(pos - QPoint(QApplication.startDragDistance() + 6, 0), Qt.MouseButton.LeftButton)
-    assert pet._ps.is_dragging and pet._ps.anim == "lifted"
-    QTest.mouseRelease(pet, Qt.MouseButton.LeftButton, pos=pos)
-    assert not pet._ps.is_dragging and pet._ps.anim == "landing"
+    with patch("platforms.windows.desktop_pet.monotonic", return_value=100):
+        pet._last_tick = 99
+        mouse_move(pos - QPoint(QApplication.startDragDistance() + 6, 0), Qt.MouseButton.LeftButton)
+        pet._tick()
+        assert pet._ps.is_dragging and (pet._ps.anim, pet._ps.fidx) == ("lifted", 0)
+        pet._last_tick = 99
+        QTest.mouseRelease(pet, Qt.MouseButton.LeftButton, pos=pos)
+        pet._tick()
+        assert not pet._ps.is_dragging and (pet._ps.anim, pet._ps.fidx) == ("landing", 2)
     pet._ps.enter("sleeping")
     pet.react("action")
     assert pet._ps.anim == "waking"
@@ -176,7 +226,9 @@ def verify_character_interactions(studio, scratch):
     with TemporaryDirectory(dir=scratch) as temp:
         recovered = stage_backup(backup, Path(temp))
         assert recovered.active == installed.name
-        assert read_package(recovered.root / "incoming" / "library" / installed.name).animations == pack.animations
+        recovered_pack = read_package(recovered.root / "incoming" / "library" / installed.name)
+        assert recovered_pack.animations == pack.animations
+        assert (recovered_pack.lifted_loop_start, recovered_pack.early_landing_frame) == (1, 2)
 
 
 verify_playback()

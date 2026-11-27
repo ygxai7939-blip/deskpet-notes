@@ -48,7 +48,7 @@ py -3.12 -m venv .\work\venv
 & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" .\work\release\DeskPetNotes.iss
 ```
 
-安装包生成在 `outputs/DeskPetNotes-Setup-1.2.1.exe`。如需运行界面冒烟测试，可以执行 `.\work\venv\Scripts\python.exe .\work\deskpet-live\verify_notes.py`。测试使用临时目录及仓库内的示例角色。
+安装包生成在 `outputs/DeskPetNotes-Setup-1.2.2.exe`。如需运行界面冒烟测试，可以执行 `.\work\venv\Scripts\python.exe .\work\deskpet-live\verify_notes.py`。测试使用临时目录及仓库内的示例角色。
 
 ## 许可证
 

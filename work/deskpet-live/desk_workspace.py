@@ -474,12 +474,14 @@ class SpritePreview(QLabel):
         self.frames = []
         self.position = 0
         self.loop = True
+        self.loop_start = 0
         self.ended = False
 
-    def set_clip(self, tiles, fps, *, loop=True):
+    def set_clip(self, tiles, fps, *, loop=True, loop_start=0):
         self.timer.stop()
         self.frames = [character_pixmap(tile, self.size()) for tile in tiles]
         self.loop = loop
+        self.loop_start = loop_start
         self.timer.setInterval(round(1000 / fps))
         self.restart()
 
@@ -496,7 +498,9 @@ class SpritePreview(QLabel):
             self.ended = True
             self.finished.emit()
             return
-        self.position = (self.position + 1) % len(self.frames)
+        self.position += 1
+        if self.position == len(self.frames):
+            self.position = self.loop_start
         self.setPixmap(self.frames[self.position])
 
 
@@ -583,7 +587,8 @@ class CharacterActions(SheetDialog):
         _, _, fps = self.pack.animations[action]
         frames = self.pack.action_frames(action)
         loop = action in ("idle", "run_left", "run_right", "lifted", "sleeping", "running")
-        self.sprite.set_clip(frames, fps, loop=loop)
+        loop_start = self.pack.lifted_loop_start if action == "lifted" else 0
+        self.sprite.set_clip(frames, fps, loop=loop, loop_start=loop_start)
         animated = len(frames) > 1
         self.frame_info.setText(f"{len(frames)} 帧 · {fps} fps" if animated else "单帧")
         self.play_button.setEnabled(animated)

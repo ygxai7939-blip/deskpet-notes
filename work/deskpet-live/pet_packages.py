@@ -47,6 +47,8 @@ class CharacterPackage:
     cell_size: tuple[int, int]
     animations: dict[str, tuple[int, int, int]]
     schema_version: int = 1
+    lifted_loop_start: int = 0
+    early_landing_frame: int = 0
 
     @property
     def idle_frames(self):
@@ -79,6 +81,10 @@ class CharacterPackage:
             meta.update(schemaVersion=2, frameSize=self.cell_size,
                         actions={action: {"row": row, "frames": frames, "fps": fps}
                                  for action, (row, frames, fps) in self.animations.items()})
+            if self.lifted_loop_start:
+                meta["actions"]["lifted"]["loopStart"] = self.lifted_loop_start
+            if self.early_landing_frame:
+                meta["actions"]["lifted"]["earlyLandingFrame"] = self.early_landing_frame
         image = BytesIO()
         self.atlas.save(image, format="WEBP", lossless=True)
         temp = None
@@ -225,7 +231,16 @@ def read_package(source):
                                        else legacy_atlas(source_image))
         lo, hi = sheet.getchannel("A").getextrema()
         require(lo == 0 and hi > 10, "图集需要透明背景和可见的角色。")
-        return CharacterPackage(key, name, description, sheet, cell, animations, version)
+        lifted = metadata["actions"].get("lifted", {}) if version == 2 else {}
+        loop_start = lifted.get("loopStart", 0)
+        early_landing = lifted.get("earlyLandingFrame", 0)
+        require(type(loop_start) is int and 0 <= loop_start < animations.get("lifted", (0, 1, 0))[1],
+                "lifted 的 loopStart 须为范围内的帧序号（从 0 开始）。")
+        require(type(early_landing) is int and 0 <= early_landing < animations.get("landing", (0, 1, 0))[1]
+                and (early_landing == 0 or loop_start > 0),
+                "earlyLandingFrame 须指向 landing 的有效帧，且 lifted 已声明分段循环。")
+        return CharacterPackage(key, name, description, sheet, cell, animations, version,
+                                loop_start, early_landing)
     except (OSError, BadZipFile, UnicodeError, RuntimeError, RecursionError, NotImplementedError,
             Image.DecompressionBombError, UnidentifiedImageError) as exc:
         raise ValueError("角色 ZIP 或图集无法读取。") from exc

@@ -41,7 +41,7 @@ def _stem(zip_path: str) -> str:
     return name.removesuffix(".zip")
 
 
-def load_pet_pil(zip_path: Path, scale: float) -> tuple[str, list[list[Image.Image]], dict]:
+def load_pet_pil(zip_path: Path, scale: float) -> tuple[str, list[list[Image.Image]], dict, tuple[int, int]]:
     """Load the same validated clips used in the import and preview dialogs."""
     pack = read_package(zip_path)
     # Keep source pixels up to 2× the logical size for high-DPI monitors.
@@ -51,4 +51,4 @@ def load_pet_pil(zip_path: Path, scale: float) -> tuple[str, list[list[Image.Ima
     for action, (row, _count, _fps) in pack.animations.items():
         frames[row] = [tile.resize(size, Image.LANCZOS) if tile.size != size else tile
                        for tile in pack.action_frames(action)]
-    return pack.name, frames, pack.animations
+    return pack.name, frames, pack.animations, (pack.lifted_loop_start, pack.early_landing_frame)

@@ -54,6 +54,7 @@ class PetState:
         start_y: float | None = None,
         *,
         anims: dict,
+        lifted_playback: tuple[int, int] = (0, 0),
     ):
         self.sx, self.sy = sx, sy
         self.sw, self.sh = sw, sh
@@ -68,6 +69,7 @@ class PetState:
         self.moving      = False
         self.personality = "friendly"
         self.anims = anims
+        self._lifted_loop_start, self._early_landing_frame = lifted_playback
 
         self._ftimer        = 0.0
         self._state         = "idle"
@@ -103,8 +105,9 @@ class PetState:
 
     # ── Drag & click events ───────────────────────────────────────────────────
 
-    def reset_animations(self, anims: dict) -> None:
+    def reset_animations(self, anims: dict, *, lifted_playback: tuple[int, int] = (0, 0)) -> None:
         self.anims = anims
+        self._lifted_loop_start, self._early_landing_frame = lifted_playback
         self.is_dragging = False
         self.enter("idle", restart=True)
 
@@ -129,6 +132,8 @@ class PetState:
             response = "landing"
             if "landing" not in self.anims:
                 landing_frame = self.anims["jumping"][1] // 2
+            elif self.anim == "lifted" and self.fidx < self._lifted_loop_start:
+                landing_frame = self._early_landing_frame
         elif self._state == "sleeping" and response in ("action", "petting"):
             response = "waking"
         self.is_dragging = False
@@ -176,6 +181,9 @@ class PetState:
                 return False
             if self._state == "sleeping" and self.anim == "failed":
                 self.fidx = min(count - 1, next_frame)
+            elif self.anim == "lifted" and next_frame >= count:
+                start = self._lifted_loop_start
+                self.fidx = start + (next_frame - count) % (count - start)
             else:
                 self.fidx = next_frame % count
 

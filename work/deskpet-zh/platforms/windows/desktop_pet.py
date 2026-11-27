@@ -38,9 +38,9 @@ def _pil_to_pixmap(img: Image.Image) -> QPixmap:
 
 
 def _load_pet(zip_path: Path, scale: float):
-    name, pil_frames, anims = load_pet_pil(zip_path, scale)
+    name, pil_frames, anims, lifted_playback = load_pet_pil(zip_path, scale)
     frames = [[_pil_to_pixmap(tile) for tile in row] for row in pil_frames]
-    return name, frames, anims
+    return name, frames, anims, lifted_playback
 
 
 # ── Screen-awake ──────────────────────────────────────────────────────────────
@@ -92,7 +92,7 @@ class DesktopPet(QWidget):
         self._rub_distance = self._rub_direction = self._rub_turns = 0
 
         tw, th = int(TILE_W * scale), int(TILE_H * scale)
-        self._name, self._frames, self._anims = self.load_character(zip_path)
+        self._name, self._frames, self._anims, self._lifted_playback = self.load_character(zip_path)
         self.setWindowTitle(f"桌面宠物 · {self._name}")
 
         screen = QApplication.primaryScreen().availableGeometry()
@@ -101,6 +101,7 @@ class DesktopPet(QWidget):
             sw=screen.width(), sh=screen.height(),
             tw=tw, th=th,
             anims=self._anims,
+            lifted_playback=self._lifted_playback,
         )
 
         if self._settings.get("movement_enabled"):
@@ -203,6 +204,7 @@ class DesktopPet(QWidget):
             self._click_timer.stop()
             self._drag_started = True
             self._ps.on_drag_start()
+            self._last_tick = monotonic()
             self.update()
         screen = QApplication.screenAt(point) or self.screen()
         bounds = screen.availableGeometry()
@@ -218,6 +220,7 @@ class DesktopPet(QWidget):
             if self._drag_started:
                 self._drag_started = False
                 self._ps.on_release()
+                self._last_tick = monotonic()
                 self.update()
             else:
                 self._click_timer.start(QApplication.doubleClickInterval())
@@ -358,16 +361,17 @@ class DesktopPet(QWidget):
         empty = QPixmap(max(1, int(TILE_W * scale)), max(1, int(TILE_H * scale)))
         empty.fill(Qt.GlobalColor.transparent)
         anims = {name: (row, 1, fps) for name, (row, fps) in LEGACY_ACTIONS.items()}
-        return "未导入角色", [[empty] for _ in anims], anims
+        return "未导入角色", [[empty] for _ in anims], anims, (0, 0)
 
     def _switch_pet(self, zip_path: Path | None, *, loaded=None, persist=True) -> None:
-        self._name, self._frames, self._anims = self.load_character(zip_path) if loaded is None else loaded
+        character = self.load_character(zip_path) if loaded is None else loaded
+        self._name, self._frames, self._anims, self._lifted_playback = character
         self._zip_path = zip_path
         self._click_timer.stop()
         self._rub_last = None
         self._rub_until = 0.0
         self._dragging = self._drag_started = False
-        self._ps.reset_animations(self._anims)
+        self._ps.reset_animations(self._anims, lifted_playback=self._lifted_playback)
         if zip_path is None:
             self._timer.stop()
             self.hide()
@@ -382,10 +386,11 @@ class DesktopPet(QWidget):
 
     def _apply_scale(self, scale: float) -> None:
         if self._zip_path is not None:
-            self._name, self._frames, anims = _load_pet(self._zip_path, scale)
-            if self._anims != anims:
+            self._name, self._frames, anims, lifted_playback = _load_pet(self._zip_path, scale)
+            if (self._anims, self._lifted_playback) != (anims, lifted_playback):
                 self._anims = anims
-                self._ps.reset_animations(anims)
+                self._lifted_playback = lifted_playback
+                self._ps.reset_animations(anims, lifted_playback=lifted_playback)
         self.resize_character(scale)
         self._save_settings()
 
